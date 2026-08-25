@@ -1,0 +1,22 @@
+---
+description: Canonical marketplace Laravel API backend project context
+alwaysApply: true
+---
+
+# Backend Project Context
+
+This is the Laravel API for the canonical product catalog marketplace. It owns all business rules and is the only layer that talks to PostgreSQL/PostGIS, Redis, Meilisearch, object storage, AI, geocoding, and email.
+
+## Responsibilities
+
+- JSON API under `/api` for the Next.js frontend only (no public third-party API yet)
+- Sanctum bearer auth with Public / Auth / Seller / Admin access levels
+- Domain logic in services; vendor access via contracts + adapters
+- Queues and scheduler for AI work and peer-review window expiry
+- Stable error shape: `{ code, message, errors? }`; money as integer minor units + currency
+
+## Stack anchors
+
+PostgreSQL 16 + PostGIS, Redis + Horizon, Meilisearch (Scout), S3-compatible storage, AI and geocoding behind interfaces.
+
+Follow `.cursor/rules/development-stages.mdc` for build order. Do not skip ahead of the current sprint.

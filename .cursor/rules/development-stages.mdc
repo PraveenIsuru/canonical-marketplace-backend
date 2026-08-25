@@ -1,0 +1,28 @@
+---
+description: Sprint commit stages for backend development order
+alwaysApply: true
+---
+
+# Backend Development Stages
+
+Work in sprint order. Each sprint ends with something testable. Prefer one focused commit (or a small set) per sprint goal. Catalogue core comes before features that depend on it.
+
+| Stage | Sprint | Backend commit goals |
+|---|---|---|
+| 0 | Setup | Laravel API scaffold, PostgreSQL + Redis + Meilisearch config, Horizon, Sanctum, base `/api` health, services/contracts/adapters folders, CI or test scripts |
+| 1 | Catalogue + auth | Users, register/login/logout, Sanctum tokens, products/canonical records CRUD foundations, migrations |
+| 2 | Stores + geo | Store profiles, LocationIQ adapter + manual pin fallback, PostGIS points for stores |
+| 3 | AI attach | AI provider interface + adapter, match endpoint, listing wizard question generation, queue path when AI is unavailable (`503` + job id) |
+| 4 | Discovery | Public product read APIs, proximity-sorted seller attachments, Meilisearch indexing, keyword search fallback |
+| 5 | Peer review | Confirmation answers, proposals, votes, version snapshots, review window scheduler, escalate to admin, revalidate webhook call after commit |
+| 6 | Community | Ownership verification, community posts, sentiment summary jobs |
+| 7 | Engagement | Wishlist, price/availability alerts, seller analytics endpoints |
+| 8 | Harden | Tests, bug fixes, failed-job handling, ops notes |
+
+## Stage rules
+
+- Stage 0 is the **initial commit** baseline. Create it before feature work.
+- Keep Eloquent models thin; put rules in services.
+- Put vendor SDKs only in adapters. Features depend on contracts.
+- When a proposal resolves or an admin edits, fire product-page revalidation **after** the DB transaction commits.
+- Do not implement stage N+1 endpoints until stage N migrations and happy-path tests (or manual checks) pass.
