@@ -193,3 +193,22 @@ Use Wayfinder to generate TypeScript functions for Laravel routes. Import from `
 - IMPORTANT: Activate `inertia-react-development` when working with Inertia React client-side patterns.
 
 </laravel-boost-guidelines>
+
+# Project Development Rules
+
+**Before making any change to this repository, read the documents in [development-docs/](development-docs/).** Start with [development-docs/README.md](development-docs/README.md), then read [development-docs/backend-build-plan.md](development-docs/backend-build-plan.md) and [development-docs/shared/api-contract.md](development-docs/shared/api-contract.md).
+
+Those documents define the build order, the wire format, and the rules the system must never break. They are the authority. This section only points at them.
+
+## Non negotiables
+
+- `development-docs/backend-build-plan.md` decides what to build and in what order. Do not start a later milestone before the current one demonstrates its stated outcome.
+- `development-docs/shared/api-contract.md` decides every shape that crosses the wire. **This repository owns it.** Change the contract first, bump its version, copy it to the frontend, then write the code. Never change a response shape silently.
+- Section 3 of the build plan lists the invariants. A change that breaks one is wrong regardless of what it improves.
+- The frontend at `../frontend` has **no mock API**. An endpoint that does not answer is a screen that cannot be built. Ship endpoints before screens, and seed data richly enough to exercise empty and edge states.
+- Append an entry to `development-docs/shared/milestone-log.md` when a milestone's endpoints are done, before the frontend starts its half. Record deviations honestly.
+- After changing anything under `development-docs/shared/`, copy it across with `cp -r development-docs/shared/. ../frontend/development-docs/shared/` and commit both repositories.
+
+## Note on the starter kit
+
+This is `laravel/react-starter-kit` being used as a JSON API service. The Inertia side, the Fortify auth screens, and the passkey and two factor tables are **out of scope**. Leave the migrations in place and expose no route to them. Do not spend time unpicking them.

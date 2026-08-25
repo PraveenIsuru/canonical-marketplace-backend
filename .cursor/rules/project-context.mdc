@@ -1,22 +1,27 @@
 ---
-description: Canonical marketplace Laravel API backend project context
+description: Canonical marketplace Laravel API, pointer to the authoritative docs
 alwaysApply: true
 ---
 
 # Backend Project Context
 
-This is the Laravel API for the canonical product catalog marketplace. It owns all business rules and is the only layer that talks to PostgreSQL/PostGIS, Redis, Meilisearch, object storage, AI, geocoding, and email.
+This is the Laravel API for the canonical product catalogue marketplace. It owns all business rules and is the only layer that talks to PostgreSQL and PostGIS, Redis, Meilisearch, object storage, the AI provider, geocoding, and email.
 
-## Responsibilities
+The client is a separate Next.js application at `../frontend`. It holds no business rules and talks to this API and nothing else.
 
-- JSON API under `/api` for the Next.js frontend only (no public third-party API yet)
-- Sanctum bearer auth with Public / Auth / Seller / Admin access levels
-- Domain logic in services; vendor access via contracts + adapters
-- Queues and scheduler for AI work and peer-review window expiry
-- Stable error shape: `{ code, message, errors? }`; money as integer minor units + currency
+## Read this before changing anything
 
-## Stack anchors
+The authority for this repository is `CLAUDE.md` and the documents it points at in `development-docs/`.
 
-PostgreSQL 16 + PostGIS, Redis + Horizon, Meilisearch (Scout), S3-compatible storage, AI and geocoding behind interfaces.
+- `development-docs/README.md` is the index.
+- `development-docs/backend-build-plan.md` holds what this repository is, the invariants, the architecture rules, the M0 specification, and the M0 to M12 roadmap.
+- `development-docs/shared/api-contract.md` holds every shape that crosses the wire. **This repository owns it.**
+- `development-docs/shared/integration-protocol.md` holds the working agreement with the frontend.
 
-Follow `.cursor/rules/development-stages.mdc` for build order. Do not skip ahead of the current sprint.
+Do not rely on this rule file for build order, endpoint definitions, or response shapes. It deliberately holds none of those, so it cannot drift out of step with the plan.
+
+## Three facts worth repeating here
+
+- This is `laravel/react-starter-kit` used as an API service. The Inertia side, Fortify screens, and passkey tables are out of scope. Leave them in place and expose no route to them.
+- The frontend has **no mock API**. Endpoints ship before the screens that consume them, and seeders are what the frontend builds against.
+- Change the contract before changing a response shape. Never the other way round.

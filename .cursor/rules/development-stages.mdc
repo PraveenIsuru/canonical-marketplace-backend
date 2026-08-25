@@ -1,28 +1,22 @@
 ---
-description: Sprint commit stages for backend development order
+description: Build order pointer, the milestone roadmap lives in development-docs
 alwaysApply: true
 ---
 
-# Backend Development Stages
+# Backend Build Order
 
-Work in sprint order. Each sprint ends with something testable. Prefer one focused commit (or a small set) per sprint goal. Catalogue core comes before features that depend on it.
+The build order is defined in `development-docs/backend-build-plan.md`, section 5 for `M0` and section 6 for `M1` to `M12`. Read it there. The endpoint to milestone mapping is in section 10 of `development-docs/shared/api-contract.md`.
 
-| Stage | Sprint | Backend commit goals |
-|---|---|---|
-| 0 | Setup | Laravel API scaffold, PostgreSQL + Redis + Meilisearch config, Horizon, Sanctum, base `/api` health, services/contracts/adapters folders, CI or test scripts |
-| 1 | Catalogue + auth | Users, register/login/logout, Sanctum tokens, products/canonical records CRUD foundations, migrations |
-| 2 | Stores + geo | Store profiles, LocationIQ adapter + manual pin fallback, PostGIS points for stores |
-| 3 | AI attach | AI provider interface + adapter, match endpoint, listing wizard question generation, queue path when AI is unavailable (`503` + job id) |
-| 4 | Discovery | Public product read APIs, proximity-sorted seller attachments, Meilisearch indexing, keyword search fallback |
-| 5 | Peer review | Confirmation answers, proposals, votes, version snapshots, review window scheduler, escalate to admin, revalidate webhook call after commit |
-| 6 | Community | Ownership verification, community posts, sentiment summary jobs |
-| 7 | Engagement | Wishlist, price/availability alerts, seller analytics endpoints |
-| 8 | Harden | Tests, bug fixes, failed-job handling, ops notes |
+This file previously carried its own eight stage sprint table. That table is gone because it contradicted the plan, and two conflicting build orders in one repository is worse than none.
 
-## Stage rules
+## Rules that apply to every milestone
 
-- Stage 0 is the **initial commit** baseline. Create it before feature work.
-- Keep Eloquent models thin; put rules in services.
-- Put vendor SDKs only in adapters. Features depend on contracts.
-- When a proposal resolves or an admin edits, fire product-page revalidation **after** the DB transaction commits.
-- Do not implement stage N+1 endpoints until stage N migrations and happy-path tests (or manual checks) pass.
+- Do not begin a milestone before its predecessor demonstrates the outcome the plan states for it.
+- The backend ships a milestone's endpoints **before** the frontend builds the screens that consume them. There is no mock API on the client side.
+- Keep Eloquent models thin. Business rules live in services, not controllers and not models.
+- Vendor SDKs live only in adapters. Features depend on interfaces. Build a fake adapter with a deliberate failing mode first.
+- The resolution matrix lives in exactly one service. Both the vote endpoint and the scheduled sweep call it.
+- Fire product page revalidation **after** the database transaction commits, dispatched as a queued job.
+- Every endpoint gets a Pest test asserting its envelope, not just its logic: success wraps in `data`, the error code is exactly the registered string, money is an integer, and no forbidden field appears.
+- Check section 3 of the build plan, the invariants, before changing anything touching products, proposals, versions, or attachments.
+- Append a milestone log entry and copy `development-docs/shared/` to the frontend before handing a milestone over.
