@@ -64,7 +64,14 @@ test('user can delete their account', function () {
         ->assertRedirect(route('home'));
 
     $this->assertGuest();
-    expect($user->fresh())->toBeNull();
+
+    /*
+     * Soft deleted, not removed. The platform treats a deleted account as invalid
+     * credentials at login rather than as a missing account, which needs the row to
+     * survive. Adding SoftDeletes to User is what changed this assertion.
+     */
+    expect($user->fresh())->not->toBeNull()
+        ->and($user->fresh()->trashed())->toBeTrue();
 });
 
 test('correct password must be provided to delete account', function () {

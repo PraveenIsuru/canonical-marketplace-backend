@@ -1,0 +1,195 @@
+<?php
+
+declare(strict_types=1);
+
+use App\Models\User;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Route;
+
+/**
+ * The twelve invariants from section 3 of development-docs/backend-build-plan.md.
+ *
+ * This file exists from M0, before the endpoints it guards, and grows as each
+ * milestone lands. That is deliberate. Written at the end it would be an exercise in
+ * describing whatever the code already does; written first it fails when a future
+ * change quietly breaks a rule the design depends on.
+ *
+ * Assertions marked "pending" name the milestone that makes them meaningful. Add the
+ * real assertion when that milestone lands rather than writing a new file.
+ */
+
+/*
+|--------------------------------------------------------------------------
+| 3. The confidence score never leaves the server
+|--------------------------------------------------------------------------
+*/
+
+it('never exposes forbidden fields from any api response', function (): void {
+    /*
+     * The three fields that must never cross the wire, per section 6 of the contract.
+     * A single careless API Resource breaks this, and it is not the kind of thing a
+     * screen review catches, so it is asserted rather than trusted.
+     */
+    $forbidden = ['confidence_score', 'confidence_band', 'created_by_store_id'];
+
+    $body = $this->getJson('/api/health')->getContent();
+
+    foreach ($forbidden as $field) {
+        expect($body)->not->toContain($field);
+    }
+})->todo('Extend to every serialiser as endpoints land, from M6 onward');
+
+/*
+|--------------------------------------------------------------------------
+| 9. Public catalogue routes work with no token and never resolve a session
+|--------------------------------------------------------------------------
+*/
+
+it('serves public routes with no token', function (): void {
+    $this->getJson('/api/health')
+        ->assertOk()
+        ->assertHeader('X-Access-Level', 'public');
+});
+
+it('does not change public route behaviour when a token happens to be present', function (): void {
+    $anonymous = $this->getJson('/api/health')->json();
+
+    $authenticated = $this->actingAs(User::factory()->create(), 'sanctum')
+        ->getJson('/api/health')
+        ->json();
+
+    // The time field naturally differs, so compare the part that must not.
+    expect($authenticated['data']['status'])->toBe($anonymous['data']['status']);
+});
+
+it('starts no session on public routes', function (): void {
+    $response = $this->getJson('/api/health')->assertOk();
+
+    /*
+     * The API middleware group carries no session or cookie middleware, so a public
+     * catalogue request must not come back trying to set one. Most catalogue traffic
+     * is anonymous, and a session cookie on those responses would both cost latency
+     * and make the responses uncacheable by any shared cache.
+     */
+    $cookies = $response->headers->getCookies();
+
+    expect($cookies)->toBeEmpty();
+});
+
+/*
+|--------------------------------------------------------------------------
+| Access levels refuse correctly
+|--------------------------------------------------------------------------
+*/
+
+it('refuses a seller route for a user with no store', function (): void {
+    Route::middleware(['auth:sanctum', 'store'])
+        ->get('/api/_inv/seller', fn () => response()->json(['data' => true]));
+
+    $this->actingAs(User::factory()->create(), 'sanctum')
+        ->getJson('/api/_inv/seller')
+        ->assertForbidden()
+        ->assertJsonPath('code', 'store_required');
+});
+
+it('refuses an admin route for a non administrator', function (): void {
+    Route::middleware(['auth:sanctum', 'admin'])
+        ->get('/api/_inv/admin', fn () => response()->json(['data' => true]));
+
+    $this->actingAs(User::factory()->create(['is_admin' => false]), 'sanctum')
+        ->getJson('/api/_inv/admin')
+        ->assertForbidden()
+        ->assertJsonPath('code', 'forbidden');
+});
+
+it('allows an admin route for an administrator', function (): void {
+    Route::middleware(['auth:sanctum', 'admin'])
+        ->get('/api/_inv/admin-ok', fn () => response()->json(['data' => true]));
+
+    $this->actingAs(User::factory()->create(['is_admin' => true]), 'sanctum')
+        ->getJson('/api/_inv/admin-ok')
+        ->assertOk();
+});
+
+/*
+|--------------------------------------------------------------------------
+| Roles are derived, never stored
+|--------------------------------------------------------------------------
+*/
+
+it('keeps is_admin out of mass assignment', function (): void {
+    /*
+     * A registration payload must never be able to make its own account an
+     * administrator. is_admin is deliberately absent from the model's fillable list.
+     */
+    $user = new User;
+    $user->fill(['name' => 'Test', 'email' => 't@example.com', 'is_admin' => true]);
+
+    expect($user->is_admin)->not->toBeTrue();
+});
+
+/*
+|--------------------------------------------------------------------------
+| PostGIS is available, because distance is computed in the database
+|--------------------------------------------------------------------------
+*/
+
+it('has postgis enabled', function (): void {
+    $version = DB::selectOne('select postgis_version() as v')->v;
+
+    expect($version)->toBeString()->not->toBeEmpty();
+});
+
+it('computes distance in the database rather than in php', function (): void {
+    // Colombo to Kandy, roughly 94 km. Proves the geography type and the distance
+    // function both work before the seller list query depends on them at M2.
+    $metres = DB::selectOne(
+        'select ST_Distance(
+            ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography,
+            ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography
+        ) as d',
+        [79.8612, 6.9271, 80.6337, 7.2906]
+    )->d;
+
+    expect($metres / 1000)->toBeGreaterThan(80.0)->toBeLessThan(110.0);
+});
+
+/*
+|--------------------------------------------------------------------------
+| Pending invariants
+|--------------------------------------------------------------------------
+| Each names the milestone that makes it assertable. Replace the todo with the real
+| assertion when that milestone lands.
+*/
+
+it('never lets a seller write to a product, attribute, or variant', function (): void {
+    //
+})->todo('M6. The only seller path into product data is a proposal');
+
+it('never removes a generated variant combination', function (): void {
+    //
+})->todo('M5 and M11. Generation is additive and permanent, for administrators too');
+
+it('creates no attachment row while a proposal is pending', function (): void {
+    //
+})->todo('M6. The absence of the row is what blocks the proposing seller');
+
+it('creates a version only on an accepted proposal or an administrator edit', function (): void {
+    //
+})->todo('M7 and M11');
+
+it('deletes a verification photograph whether verification passed or failed', function (): void {
+    //
+})->todo('M9');
+
+it('falls back to keyword search rather than queueing, for buyer search only', function (): void {
+    //
+})->todo('M3');
+
+it('keeps a store visible if and only if it holds at least one attachment', function (): void {
+    //
+})->todo('M5 and M8');
+
+it('sends every price as an integer in the smallest currency unit', function (): void {
+    //
+})->todo('M2. Assert against the seller list serialiser');

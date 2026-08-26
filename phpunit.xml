@@ -23,8 +23,15 @@
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>
         <env name="CACHE_STORE" value="array"/>
-        <env name="DB_CONNECTION" value="sqlite"/>
-        <env name="DB_DATABASE" value=":memory:"/>
+        <!--
+            Tests run against a real PostgreSQL database, not SQLite in memory.
+            Two reasons: PostGIS has no SQLite equivalent, and the seller list query
+            computes distance in the database, so a test on SQLite would not exercise
+            the thing most likely to break. canonical_marketplace_test is separate
+            from the development database and is rebuilt by RefreshDatabase.
+        -->
+        <env name="DB_CONNECTION" value="pgsql"/>
+        <env name="DB_DATABASE" value="canonical_marketplace_test"/>
         <env name="DB_URL" value=""/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
