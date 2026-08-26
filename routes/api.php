@@ -3,8 +3,11 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\EmailVerificationController;
 use App\Http\Controllers\Api\PasswordResetController;
+use App\Http\Controllers\Api\ProductController;
+use App\Http\Controllers\Api\StoreController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Support\Facades\Route;
 
@@ -47,7 +50,15 @@ Route::get('/health', fn () => response()->json([
 | Anonymous readable. Must not change behaviour when a token happens to be present.
 */
 Route::middleware(['public', 'throttle:catalogue'])->group(function (): void {
-    // M2  EP-08, EP-09, EP-10, EP-11, EP-12, EP-13, EP-53
+    // M2
+    Route::get('/categories', [CategoryController::class, 'index']);
+    Route::get('/products', [ProductController::class, 'index']);
+    Route::get('/products/{product}', [ProductController::class, 'show']);
+    Route::get('/products/{product}/variants', [ProductController::class, 'variants']);
+    Route::get('/products/{product}/sellers', [ProductController::class, 'sellers']);
+    Route::get('/products/{product}/summary', [ProductController::class, 'summary']);
+    Route::get('/stores/{store}', [StoreController::class, 'show']);
+
     // M9  EP-31, EP-57
     // M10 EP-52
 });

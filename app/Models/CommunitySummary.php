@@ -1,0 +1,40 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Models;
+
+use Database\Factories\CommunitySummaryFactory;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
+/**
+ * The AI generated sentiment summary. One per product, covering all variants together.
+ *
+ * @property int $id
+ * @property int $product_id
+ * @property string $summary_text
+ * @property int $post_count_at_generation
+ */
+class CommunitySummary extends Model
+{
+    /** @use HasFactory<CommunitySummaryFactory> */
+    use HasFactory;
+
+    protected $fillable = ['product_id', 'summary_text', 'post_count_at_generation', 'generated_at'];
+
+    /** @return array<string, string> */
+    protected function casts(): array
+    {
+        return [
+            'generated_at' => 'datetime',
+            'post_count_at_generation' => 'integer',
+        ];
+    }
+
+    public function product(): BelongsTo
+    {
+        return $this->belongsTo(Product::class);
+    }
+}

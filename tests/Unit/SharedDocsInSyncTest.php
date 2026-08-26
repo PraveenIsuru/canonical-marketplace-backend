@@ -18,14 +18,28 @@ declare(strict_types=1);
  */
 
 /**
- * @return array<string, string> filename => sha256 of its contents
+ * @return array<string, string> filename => sha256 of its normalised contents
  */
 function hashSharedDocs(string $directory): array
 {
     $hashes = [];
 
     foreach (glob($directory.'/*.md') ?: [] as $path) {
-        $hashes[basename($path)] = hash_file('sha256', $path);
+        /*
+         * Line endings are normalised before hashing, and this is not cosmetic.
+         *
+         * This repository carries a .gitattributes with eol=lf while the frontend does
+         * not, so on Windows the two checkouts of a byte identical document differ by
+         * one byte per line. Hashing raw bytes would report drift on every commit
+         * forever, and a check that cries wolf is a check people learn to ignore.
+         *
+         * What matters is that the content agrees. Line endings are a platform
+         * artifact, not a contract difference.
+         */
+        $contents = (string) file_get_contents($path);
+        $normalised = str_replace(["\r\n", "\r"], "\n", $contents);
+
+        $hashes[basename($path)] = hash('sha256', $normalised);
     }
 
     ksort($hashes);

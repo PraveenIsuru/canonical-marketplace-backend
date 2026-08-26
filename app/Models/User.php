@@ -7,6 +7,7 @@ use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -68,5 +69,16 @@ class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
             'latitude' => 'float',
             'longitude' => 'float',
         ];
+    }
+
+    /**
+     * The user's store, if they have one.
+     *
+     * This relation is the whole definition of the seller role. There is no role
+     * column and no roles array: a user is a seller if and only if this returns a row.
+     */
+    public function store(): HasOne
+    {
+        return $this->hasOne(Store::class);
     }
 }

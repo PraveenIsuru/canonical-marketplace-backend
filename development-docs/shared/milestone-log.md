@@ -23,7 +23,7 @@ Update the two status columns as milestones complete. Everything else in this fi
 |---|---|---|
 | M0 Foundations | Done, with deferrals | Done |
 | M1 Accounts | Done | Done |
-| M2 Catalogue read | Not started | Not started |
+| M2 Catalogue read | Done | Not started |
 | M3 Search | Not started | Not started |
 | M4 Seller onboarding | Not started | Not started |
 | M5 Wizard | Not started | Not started |
@@ -224,6 +224,74 @@ Copy this block, fill it in, append it to section 3. Keep entries in chronologic
 - Logout returned 204 and the session then resolved to null; login restored it; a wrong password returned the neutral message that does not say which half was wrong
 - `/account` returned 200 when signed in and 307 to `/login?next=%2Faccount` when signed out
 - The full reset cycle end to end: requested a link, pulled the real token from the mail log, reset the password, confirmed the old password stopped working, confirmed the new one worked, and confirmed reusing the same token was refused
+
+---
+
+### M2 Catalogue read path, backend, 2026-08-26
+
+**Shipped.**
+- The **entire database schema**: stores, products, product_attributes, variants, attachments, proposals, proposal_votes, product_versions, product_images, verification_attempts, community_posts, community_summaries, wishlist_items, product_views, with every index from the schema design
+- Models for the catalogue half, with factories for all of them
+- `CatalogueSeeder`: 5 products, 13 variants, 6 stores across 5 cities, 16 attachments
+- EP-08 `/products`, EP-09 `/products/{slug}`, EP-10 `/variants`, EP-11 `/sellers`, EP-12 `/summary`, EP-13 `/stores/{id}`, EP-53 `/categories`
+- `SellerListQuery` and `SellerListFilters`, the PostGIS distance query
+
+**Contract.**
+- Contract version at time of writing: 1
+- Changes made to api-contract.md: none
+- Error codes now live from this milestone: `not_found` on an unknown slug and on a dark store
+
+**Response shapes the frontend should code against.**
+- `lowest_price_minor` and `currency` are **null** on a product no live store carries. Never zero, which would render as free
+- `seller_count` counts **distinct stores**, so one store carrying three variants counts once
+- `distance_km` is **null** when no `lat` and `lng` were supplied, and a rounded float otherwise
+- `/summary` returns `data: null` when no summary exists, so the section is omitted rather than rendered blank
+- `/variants` returns **every** combination, including those with `seller_count: 0`
+- Query parameters on `/sellers`: `variant_id`, `lat`, `lng`, `max_distance_km`, `max_price_minor`, `min_rating`, `available_only`, `sort` (one of distance, price, rating), `page`
+
+**Seeded data available to build against.**
+
+There is no mock API, so this is what the screens have. It deliberately includes the states that are easy to forget:
+
+| Slug | What it exercises |
+|---|---|
+| `vertex-one-smartphone` | Two attributes, six combinations, five sellers, a sentiment summary, **one combination nobody carries**, and **one seller out of stock** |
+| `meridian-14-laptop` | One attribute, three combinations, two sellers in the same city |
+| `standard-usb-c-cable-2m` | **No attributes at all**, so a single default variant and no variant selector |
+| `orbit-wireless-earbuds` | **Zero sellers.** Still listed, null price, page still loads |
+| `lumen-desk-lamp` | Zero sellers by a different route: its only would be seller is dark |
+
+Stores sit in Colombo (two, a few km apart), Kandy, Galle, Jaffna, and one dark store in Matara. Log in as any seeded seller with the email pattern shown in the seeder.
+
+**Deviations from the plan.**
+- **The PostGIS point is derived in a model `saving` hook, not at each call site.** The column is NOT NULL, so setting it after insert is too late, and doing it per call site means every future path has to remember. The hook means the factory, the seeder, and the M4 registration endpoint all get a correct point for free.
+- **`DatabaseSeeder` no longer uses `WithoutModelEvents`.** Store visibility is maintained by model events on `Attachment`. Muting events would have seeded a catalogue in which every store is dark and no seller list returned anything, which looks like a broken frontend for a reason nothing in the code explains.
+- **`Product::attributes()` is named `productAttributes()`.** `attributes` collides with Eloquent's own internal attribute bag.
+- The seeder spreads the two Colombo stores a few kilometres apart. At identical coordinates the seller list showed several rows at 0.0 km, which reads as broken.
+
+**Known gaps handed to the other side.**
+- `store` is still null on every session until M4, so seller navigation stays unreachable.
+- Product images are seeded as rows with fake storage paths. No actual image files exist, so `primary_image.url` points at nothing. Expect broken images and build the placeholder state now rather than later.
+- `current_version_number` is reported as 1 for every product. Real versions arrive at M5.
+
+**Worth knowing: a hole in the live flag.**
+
+`is_live` is maintained by model events on `Attachment`. A **mass delete** through the query builder, `$store->attachments()->delete()`, does not fire those events, so the flag would silently stay true and a dark store would keep appearing in seller lists. A test documents this. The application only ever deletes one attachment at a time, so it does not bite today, but it is the drift the design anticipated when it called for a periodic reconciliation job at M12.
+
+**Verified by.**
+- 25 tests in `tests/Feature/Api/CatalogueTest.php`, including distance ordering asserted against real coordinates from two different buyer locations, dark stores excluded, null distance without coordinates, every filter, prices as integers, and a public route returning identical data with and without a token
+- `composer test` green: Pint passed, PHPStan level 7 with 0 errors, 125 passed and 9 todo
+- Live against seeded data: Colombo to Kandy measured 97 km and Colombo to Jaffna 303 km, matching real geography; ordering flipped correctly when the buyer moved to Jaffna; `max_distance_km=120` dropped Jaffna; `available_only` dropped the out of stock row; the dark store returned 404
+
+---
+
+### Infrastructure note, both repositories, 2026-08-26
+
+**The shared docs sync check had a flaw, found by the check itself.**
+
+The backend carries a `.gitattributes` with `eol=lf`; the frontend carried none. On Windows that means two byte identical documents differ by one byte per line, so hashing raw bytes reported drift that was not real. Once both repositories were committed it would have failed permanently, and a check that cries wolf is one people learn to ignore.
+
+Both checkers now normalise line endings before hashing, because what matters is that the content agrees; line endings are a platform artifact. A `.gitattributes` was also added to the frontend so the stored bytes match too.
 
 ---
 
