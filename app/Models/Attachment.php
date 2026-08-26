@@ -57,16 +57,19 @@ class Attachment extends Model
         static::deleted(fn (self $attachment) => $attachment->store?->recomputeLiveFlag());
     }
 
+    /** @return BelongsTo<Store, $this> */
     public function store(): BelongsTo
     {
         return $this->belongsTo(Store::class);
     }
 
+    /** @return BelongsTo<Variant, $this> */
     public function variant(): BelongsTo
     {
         return $this->belongsTo(Variant::class);
     }
 
+    /** @return BelongsTo<Product, $this> */
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class);

@@ -21,6 +21,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property array<string, string> $attribute_values
  * @property string $combination_hash
  * @property bool $is_default
+ *
+ * Added by the variant query through selectSub, not columns on the table.
+ * @property-read int|null $lowest_price_minor
+ * @property-read int|null $seller_count
  */
 class Variant extends Model
 {
@@ -57,11 +61,13 @@ class Variant extends Model
         return hash('sha256', (string) json_encode($attributeValues));
     }
 
+    /** @return BelongsTo<Product, $this> */
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class);
     }
 
+    /** @return HasMany<Attachment, $this> */
     public function attachments(): HasMany
     {
         return $this->hasMany(Attachment::class);

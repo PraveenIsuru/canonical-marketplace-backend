@@ -24,6 +24,8 @@ class ProductResource extends JsonResource
     /** @return array<string, mixed> */
     public function toArray(Request $request): array
     {
+        $currentVersion = $this->resource->currentVersion;
+
         return [
             'id' => $this->id,
             'slug' => $this->slug,
@@ -31,7 +33,13 @@ class ProductResource extends JsonResource
             'description' => $this->description,
             'category' => $this->category,
             'specifications' => (object) $this->specifications,
-            'current_version_number' => $this->currentVersion?->version_number ?? 1,
+            /*
+             * Null until a version exists. Every seeded product is in that state today,
+             * because versions are only created when a proposal is accepted or an
+             * administrator edits, neither of which has happened yet. Reported as 1 so
+             * the client always has a number to show.
+             */
+            'current_version_number' => $currentVersion === null ? 1 : $currentVersion->version_number,
             'seller_count' => (int) ($this->seller_count ?? 0),
             'images' => $this->images->map(fn ($image) => [
                 'id' => $image->id,

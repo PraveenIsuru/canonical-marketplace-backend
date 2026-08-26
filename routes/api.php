@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\EmailVerificationController;
 use App\Http\Controllers\Api\PasswordResetController;
 use App\Http\Controllers\Api\ProductController;
+use App\Http\Controllers\Api\SearchController;
 use App\Http\Controllers\Api\StoreController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Support\Facades\Route;
@@ -64,7 +65,8 @@ Route::middleware(['public', 'throttle:catalogue'])->group(function (): void {
 });
 
 Route::middleware(['public', 'throttle:search'])->group(function (): void {
-    // M3  EP-14
+    // M3. Never returns ai_unavailable; it falls back to keyword results instead.
+    Route::get('/search', [SearchController::class, 'buyer']);
 });
 
 /*
@@ -124,7 +126,11 @@ Route::middleware('auth:sanctum')->group(function (): void {
 | Refuses with 403 store_required when the caller holds no store.
 */
 Route::middleware(['auth:sanctum', 'store'])->group(function (): void {
-    // M3  EP-15
+    // M3. Unlike buyer search, this one queues and returns 503 on provider failure,
+    // because a degraded result here could admit a duplicate canonical record.
+    Route::get('/seller/catalogue-search', [SearchController::class, 'sellerCatalogue'])
+        ->middleware('throttle:search');
+
     // M4  EP-17, EP-18, EP-54
     // M5  EP-20, EP-23, EP-24, EP-48
     // M6  EP-19, EP-21, EP-22

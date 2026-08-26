@@ -18,7 +18,7 @@ class ProductFactory extends Factory
     /** @return array<string, mixed> */
     public function definition(): array
     {
-        $name = $this->faker->unique()->words(3, true);
+        $name = implode(' ', (array) $this->faker->unique()->words(3));
 
         return [
             'name' => Str::title($name),

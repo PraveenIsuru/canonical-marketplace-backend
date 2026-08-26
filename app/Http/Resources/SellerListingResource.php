@@ -38,7 +38,17 @@ class SellerListingResource extends JsonResource
                 'rating' => $row->rating === null ? null : (float) $row->rating,
             ],
             'variant_id' => (int) $row->variant_id,
-            'attribute_values' => json_decode((string) $row->attribute_values, false),
+            /*
+             * Decoded to an associative array and then cast, so an empty combination
+             * serialises as {} rather than [].
+             *
+             * A product with no attributes stores its default variant as an empty JSON
+             * array, and json_decode would hand that straight back as [], which is a
+             * different type from the object every other variant produces. The
+             * frontend caught this: one endpoint said {} and this one said [] for the
+             * same variant.
+             */
+            'attribute_values' => (object) (json_decode((string) $row->attribute_values, true) ?? []),
             'price_minor' => (int) $row->price_minor,
             'currency' => $row->currency,
             'is_available' => (bool) $row->is_available,

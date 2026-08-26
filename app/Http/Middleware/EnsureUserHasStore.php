@@ -21,11 +21,9 @@ final class EnsureUserHasStore
     {
         $user = $request->user();
 
-        // The store relation does not exist until M4. Until then this refuses
-        // everything, which is correct: nobody has a store yet.
-        $hasStore = $user !== null
-            && method_exists($user, 'store')
-            && $user->store()->exists();
+        // The relation exists as of M2. A user is a seller if and only if a store
+        // row references them, which is why this reads the relation rather than a flag.
+        $hasStore = $user !== null && $user->store()->exists();
 
         if (! $hasStore) {
             throw ApiException::storeRequired();

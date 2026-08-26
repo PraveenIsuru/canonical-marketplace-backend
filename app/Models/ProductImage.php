@@ -62,6 +62,7 @@ class ProductImage extends Model
         return Storage::disk(config('filesystems.product_images', 'public'))->url($this->storage_path);
     }
 
+    /** @return BelongsTo<Product, $this> */
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class);

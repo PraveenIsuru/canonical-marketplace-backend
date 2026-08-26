@@ -35,6 +35,16 @@
         <env name="DB_URL" value=""/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
+        <!--
+            Scout is disabled outright in tests.
+
+            Product is Searchable, so without this every factory created product is
+            pushed to the real Meilisearch index and every rollback leaves it there.
+            It polluted the live index with test data and displaced the seeded
+            catalogue, which made a manual search return nothing while the suite still
+            passed. Tests must never write to a shared external service.
+        -->
+        <env name="SCOUT_DRIVER" value="null"/>
         <env name="SESSION_DRIVER" value="array"/>
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>

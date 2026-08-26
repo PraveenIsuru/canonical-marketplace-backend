@@ -35,6 +35,7 @@ final class SellerListQuery
         private readonly SellerListFilters $filters,
     ) {}
 
+    /** @return LengthAwarePaginator<int, \stdClass> */
     public function paginate(): LengthAwarePaginator
     {
         $hasCoordinates = $this->filters->hasCoordinates();

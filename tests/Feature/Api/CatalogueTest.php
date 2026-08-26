@@ -395,3 +395,32 @@ it('derives the category list with counts', function (): void {
     expect($categories['Mobile'])->toBe(2)
         ->and($categories['Audio'])->toBe(1);
 });
+
+it('serialises an empty combination as an object, not an array', function (): void {
+    /*
+     * A product with no attributes stores its default variant as an empty JSON array.
+     * Decoded naively that comes back as [], which is a different type from the object
+     * every other variant produces, and a typed client rejects it.
+     *
+     * Both endpoints that expose a combination must agree.
+     */
+    $product = Product::factory()->create();
+    $variant = Variant::factory()->for($product)->default()->create();
+    liveStoreCarrying($variant, 'Colombo', 2500);
+
+    $fromVariants = $this->getJson("/api/products/{$product->slug}/variants")
+        ->assertOk()
+        ->json('data.0.attribute_values');
+
+    $fromSellers = $this->getJson("/api/products/{$product->slug}/sellers")
+        ->assertOk()
+        ->json('data.0.attribute_values');
+
+    expect($fromVariants)->toBe([])
+        ->and($fromSellers)->toBe([]);
+
+    // json_decode to an array cannot tell {} from [], so assert the raw JSON too.
+    expect($this->getJson("/api/products/{$product->slug}/sellers")->getContent())
+        ->toContain('"attribute_values":{}')
+        ->not->toContain('"attribute_values":[]');
+});

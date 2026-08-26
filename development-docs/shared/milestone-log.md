@@ -23,8 +23,8 @@ Update the two status columns as milestones complete. Everything else in this fi
 |---|---|---|
 | M0 Foundations | Done, with deferrals | Done |
 | M1 Accounts | Done | Done |
-| M2 Catalogue read | Done | Not started |
-| M3 Search | Not started | Not started |
+| M2 Catalogue read | Done | Done |
+| M3 Search | Done | Not started |
 | M4 Seller onboarding | Not started | Not started |
 | M5 Wizard | Not started | Not started |
 | M6 Confirmation and proposals | Not started | Not started |
@@ -295,6 +295,129 @@ Both checkers now normalise line endings before hashing, because what matters is
 
 ---
 
+### Infrastructure note, backend, 2026-08-26
+
+Re-recorded. This entry was written when Meilisearch was configured and was lost from the log at some point between then and the M2 commit. The work itself was never lost, and was re-verified before writing this.
+
+**Meilisearch configured.**
+- Meilisearch Cloud, server 1.53.1. `meilisearch/meilisearch-php` installed, `config/scout.php` published
+- `SCOUT_DRIVER=meilisearch`, `SCOUT_QUEUE=true` so indexing runs off the request, which matters at M5 where the wizard submit is already one large transaction
+- `MEILISEARCH_HOST` and `MEILISEARCH_KEY` live in `.env` only. The key is admin scoped, which Scout needs in order to create indexes and write documents
+- Verified by a health check, a version read, an index create, and a delete
+
+**PHP had no CA certificate bundle at all.** This was the important half.
+
+`curl.cainfo` and `openssl.cafile` were both empty and no `cacert.pem` existed anywhere, so **every outbound HTTPS request from PHP failed**, including to google.com. It surfaced as a Meilisearch connection error but was never specific to Meilisearch.
+
+Left unfixed it would have broken the AI provider at M3, LocationIQ geocoding at M4, and S3 object storage at M7, each looking like a vendor outage rather than a local misconfiguration.
+
+Fixed by downloading the Mozilla CA bundle to `C:\php-8.3.12\extras\ssl\cacert.pem` and pointing both ini directives at it. `php.ini` was backed up first. Certificate verification was **not** disabled, since doing so would have hidden the fault and followed the project into production.
+
+This is a machine level change and lives outside both repositories. A different machine will need it done again.
+
+**Open decision, not blocking.** The ADR rejected Algolia because a hosted service with per operation pricing was inappropriate for this project, and chose Meilisearch partly because it self hosts free as a single binary. Meilisearch Cloud reintroduces that cost after a 14 day trial. The configuration is identical either way, so switching to the local binary is a one line change to `MEILISEARCH_HOST`. Decide before the write up whether the report describes self hosted or hosted search.
+
+---
+
+### M2 Catalogue read path, frontend, 2026-08-26
+
+**Shipped.**
+- S-01 `/` with category tiles and a recently added strip, static, revalidated hourly
+- S-02 `/products` with category filtering in the URL and pagination
+- S-04 `/products/[slug]`, prerendered per product, with client variant selection
+- S-05 `/products/[slug]/sellers` with filters, sorting, and pagination
+- S-07 `/stores/[id]`, contact block and listings
+- X-03 location prompt wired into S-04 and S-05, not just the account screen
+- `lib/api/catalogue.ts` and `lib/schemas/catalogue.ts` for EP-08 to EP-13 and EP-53
+- `components/product/ProductImage.tsx`, the placeholder for images that fail to load
+- `scripts/verify-m2-contract.mjs`, which parses every live M2 response through its schema
+
+**Contract.**
+- Contract version at time of writing: 1
+- Changes made to api-contract.md: none
+- Error codes handled on screen: `not_found` on an unknown slug and on a dark store
+
+**Deviations from the plan.**
+- **Catalogue reads bypass `/api/proxy` entirely.** The proxy exists to attach a session token; routing public reads through it would resolve a session on the highest traffic paths and make the responses uncacheable. They go server side straight to Laravel.
+- **The seller list is cached when it is not personalised, and uncached when it is.** Without coordinates or filters the response is identical for every visitor, and caching that call is what allows S-04 to be statically generated. Any request carrying coordinates, filters, or a sort passes `revalidate: 0`, so one buyer's distance ordering can never be served to another.
+- **`loading.tsx` was removed from `products/` and `stores/[id]`, replaced by `<Suspense>` inside the catalogue page.** See the note below; this one is worth reading before adding a `loading.tsx` anywhere near a route that can 404.
+- **`getProducts` takes a `revalidate` argument.** A hardcoded 300 inside the helper was silently overriding the home page's hourly setting, because Next uses the shortest revalidate across every fetch in a route.
+- S-05 fetches an unfiltered list on the server and hands it to the client panel as initial data, so contact details are in the server rendered HTML rather than appearing only once JavaScript runs.
+
+**A backend contract violation this milestone caught.**
+
+`EP-11 /sellers` returned `attribute_values` as `[]` for a product with no attributes, while `EP-10 /variants` returned `{}` for the same variant. The contract specifies an object. A product whose default variant has an empty combination is stored as an empty JSON array, and `json_decode` handed that straight back.
+
+It was found by the zod schema at the fetch boundary during a build, not by a screen rendering something odd. Fixed at the source in `SellerListingResource` with a cast, matching what `EP-10` already did, and covered by a regression test asserting the raw JSON, since `json_decode` to an array cannot tell `{}` from `[]`. This is the drift the schemas exist to catch.
+
+**Worth knowing: notFound() and streaming.**
+
+A `loading.tsx` beside a route applies to **every nested route as well**, and it makes Next begin streaming before the page component runs. Once streaming has begun a `notFound()` can no longer change the status, so the page renders the not found UI with a **200**. That is a soft 404 a crawler will index.
+
+`app/(public)/products/loading.tsx` was doing exactly this to `/products/[slug]`. Before the fix, an unknown slug and a dark store both answered 200. Both now answer 404. The loading state was restored as a `<Suspense>` boundary **inside** the catalogue page, which is scoped to that page and does not leak downward.
+
+**Known gaps handed to the other side.**
+- Product images 404, because the seeder writes storage paths for files that were never uploaded. The placeholder handles it and stays useful once real uploads arrive at M5.
+- The wishlist button on S-04 is a disabled affordance bound to the selected variant. The mutation is M8, and rendering a control that fails when clicked would be worse than one that says it is not ready.
+- S-07 is server rendered on demand rather than prerendered at build. There is no endpoint that lists live stores, so there is nothing to enumerate for `generateStaticParams`. It still caches for 300 seconds after first request. See the open request below.
+- Seller navigation remains unreachable, as expected while `store` is null.
+
+**Verified by.**
+- `npm run build`, `npm run lint`, and `npx tsc --noEmit` all clean. All five seeded products prerender as SSG; `/` is static at 1h; `/products` and `/products/[slug]/sellers` are dynamic, which is correct
+- `scripts/verify-m2-contract.mjs`: all 11 live responses parse, including both `/summary` states and both `/sellers` coordinate modes
+- Against the production build with seeded data: all five products listed anonymously; all six combinations of `vertex-one-smartphone` render including the one nobody carries; the summary shows; `standard-usb-c-cable-2m` renders **no** variant selector; `orbit-wireless-earbuds` and `lumen-desk-lamp` load with the empty seller state and no price; with no location **no distance is rendered at all** and never a zero; from Colombo the distances read 2.1, 5.6, and 97.0 km in a sensible order; `available_only` cut 10 sellers to 9, `max_distance_km=50` to 4, `max_price_minor=240000` to 2; the store page shows address, email, and phone with no login; the dark store is absent from every seller list and answers 404 at its own URL
+
+---
+
+### M3 Search, backend, 2026-08-26
+
+**Shipped.**
+- EP-14 `GET /api/search`, public, and EP-15 `GET /api/seller/catalogue-search`, seller only
+- `AiProvider` interface, with `FakeAiProvider` (including a deliberate failing mode) and `AnthropicAiProvider`
+- `AiServiceProvider` binding the interface by config, and `config/ai.php`
+- `ProductSearchService`, `SearchMode`, and `SearchResult`
+- Scout `Searchable` on `Product`, with Meilisearch index settings
+- `ai_jobs` table, `AiJob` model, and the `InterpretSearchQuery` queued job
+- The seeded catalogue is indexed: 5 documents, searchable by name, category, description, and specification values
+
+**Contract.**
+- Contract version at time of writing: 1
+- Changes made to api-contract.md: none. The implementation matched it
+- Error codes now live from this milestone: `ai_unavailable`, from EP-15 only
+
+**Response shapes the frontend should code against.**
+- Both endpoints return `mode` **beside** `data` at the top level, never inside it. Values are `ai` and `keyword`
+- **EP-14 never returns `ai_unavailable` and never queues work.** On any provider failure it returns **200** with `mode: "keyword"`
+- **EP-15 does the opposite.** On provider failure it returns **503** with `code: "ai_unavailable"` and `queued_job_id` at the top level. That body carries no `data` and no `mode`
+- Query parameters on both: `q` (required, 1 to 200 characters) and `category` (optional)
+- Pagination links carry `q`, not Scout's own `query` parameter
+
+**Deviations from the plan.**
+- **The `AiProvider` interface carries one method, not five.** The ADR describes five kinds of AI call. Only `interpretSearchQuery` exists, because four unimplemented stubs would be dead code no test exercises. The interface grows one method per milestone, and the coming methods are listed in its docblock, including the note that two of them need vision capable models.
+- **An `ai_jobs` table was added, which the schema document does not define.** EP-15 must return a `queued_job_id` that EP-50 can later poll for a status and a result. Laravel's own `jobs` table deletes the row the moment work finishes, so polling it would report "not found" for every job that succeeded. The contract already specifies the job payload; this is the storage it implies.
+- **`stores.location` is now a PostGIS generated column.** It was previously built by a model `saving` hook, which was a convention any future write could forget. The database derives it from the coordinate pair, so the two cannot disagree by construction. This also removed the last place PHP assembled spatial SQL by hand.
+- The fake interpreter strips filler words rather than doing anything clever. Its purpose is to return something **different** from the raw query, so a test can tell which path served a response from the results rather than trusting the mode field to be honest about itself.
+
+**Two defects found and fixed during this milestone.**
+
+**The test suite was writing to the live Meilisearch index.** Making `Product` searchable without disabling Scout in tests meant every factory created product was pushed to the real Cloud index and left there by rollback. It grew to 29 documents, displaced the seeded catalogue, and a manual search for a seeded product returned nothing **while the suite still passed green**. `phpunit.xml` now sets `SCOUT_DRIVER=null`, and the index was flushed and reimported. Tests must never write to a shared external service.
+
+**PHPStan had 63 pre-existing errors from M2 that went unreported.** They were in the M2 resources, controller, and factories, and were missed because the `composer test` run at the end of M2 was backgrounded and its output truncated; the exit code was read without the analysis lines. The earlier claim that M2 passed "PHPStan level 7 with 0 errors" was wrong, and this entry corrects it. The root cause was relation methods declared without generics, so Larastan resolved every relation to `Collection<Model>`. All are now fixed at source and the analyser is genuinely at zero.
+
+**Known gaps handed to the other side.**
+- **Indexing runs through the queue.** `SCOUT_QUEUE=true` with the `database` driver means a worker must be running, or nothing is indexed. `scout:import` reports success either way, which is misleading. Run `php artisan queue:work --stop-when-empty` after importing, and keep a worker running from M5 when the wizard indexes new products.
+- **Keyword mode is genuinely worse than AI mode**, which is the point of the visible notice. A verbose query like "I am looking for a good smartphone" finds the product in `ai` mode and returns nothing in `keyword` mode, because the raw string goes to the engine untouched. S-03 should show both the fallback notice and the no matches message so a visitor can tell a weak query from a degraded service.
+- EP-50 `GET /api/jobs/{id}` does not exist yet; it lands at M5. A `queued_job_id` from EP-15 is a real, persisted row, but nothing can poll it until then.
+- The real Anthropic adapter is implemented but unexercised. `AI_PROVIDER=fake` is the default, and no test touches the network.
+
+**Verified by.**
+- 22 tests in `tests/Feature/Api/SearchTest.php`, covering both modes read from the response body, empty results in each mode, buyer parity with and without a token, no session started, and the queued job completing and failing
+- The decisive test asserts the divergence directly: one provider failure, buyer 200 with `mode: "keyword"`, seller 503 with `ai_unavailable`
+- `composer test` green: Pint passed, PHPStan level 7 with **0 errors**, 149 passed and 9 todo
+- Live against the running server and the real index: `vertex` returns the smartphone in `ai` mode; "I am looking for a good smartphone" and "I would like a cheap laptop please" both resolve to the right product; with `AI_FAKE_SHOULD_FAIL=true` the buyer endpoint stays 200 with `mode: "keyword"` while the seller endpoint returns 503 with a top level `queued_job_id` and no `data` or `mode` key
+
+---
+
 ---
 
 ## 4. Open requests
@@ -303,7 +426,8 @@ Things one side needs from the other that are not yet built. Remove a row only w
 
 | Raised by | Date | Need | Status |
 |---|---|---|---|
-| Backend | 2026-08-26 | A Meilisearch server must be installed and running before M3 search work | Open, blocks M3 |
+| Backend | 2026-08-26 | A Meilisearch server must be installed and running before M3 search work | **Closed 2026-08-26.** M3 shipped against it: the seeded catalogue is indexed and both search endpoints answer from it |
 | Backend | 2026-08-26 | Redis must be available before queued AI work needs Horizon's visibility, or the queue driver decision revisited | Open, blocks nothing yet |
+| Frontend | 2026-08-26 | No endpoint lists live stores, so S-07 cannot be prerendered at build time through `generateStaticParams`. It renders on demand and caches for 300 seconds instead | Open, low priority. Only affects build time prerendering, not correctness |
 
 Use this table rather than guessing. A frontend screen that needs a field the contract does not define adds a row here. It does not invent a field name and hope.

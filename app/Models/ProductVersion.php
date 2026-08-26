@@ -49,16 +49,19 @@ class ProductVersion extends Model
         ];
     }
 
+    /** @return BelongsTo<Product, $this> */
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class);
     }
 
+    /** @return BelongsTo<Store, $this> */
     public function causedByStore(): BelongsTo
     {
         return $this->belongsTo(Store::class, 'caused_by_store_id');
     }
 
+    /** @return BelongsTo<User, $this> */
     public function causedByUser(): BelongsTo
     {
         return $this->belongsTo(User::class, 'caused_by_user_id');

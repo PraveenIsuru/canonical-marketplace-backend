@@ -77,6 +77,7 @@ class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
      * This relation is the whole definition of the seller role. There is no role
      * column and no roles array: a user is a seller if and only if this returns a row.
      */
+    /** @return HasOne<Store, $this> */
     public function store(): HasOne
     {
         return $this->hasOne(Store::class);

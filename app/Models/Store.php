@@ -11,7 +11,6 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Support\Facades\DB;
 
 /**
  * A seller's store. One per user.
@@ -69,48 +68,35 @@ class Store extends Model
         ];
     }
 
+    /** @return BelongsTo<User, $this> */
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
     }
 
+    /** @return HasMany<Attachment, $this> */
     public function attachments(): HasMany
     {
         return $this->hasMany(Attachment::class);
     }
 
-    /** Only live stores are visible to buyers. */
+    /**
+     * Only live stores are visible to buyers.
+     *
+     * @param  Builder<Store>  $query
+     * @return Builder<Store>
+     */
     public function scopeLive(Builder $query): Builder
     {
         return $query->where('is_live', true);
     }
 
     /**
-     * Derives the PostGIS point from the coordinate pair on every save.
+     * Updates the coordinates.
      *
-     * Done here rather than at each call site so the two can never disagree. A store
-     * created by a factory, by the seeder, or by the registration endpoint all get a
-     * correct point without any of them remembering to build one.
-     *
-     * ST_MakePoint takes longitude first. Reversing the pair is the classic geospatial
-     * bug and would put every Sri Lankan store somewhere off the coast of Somalia.
+     * The PostGIS point follows automatically: `location` is a generated column, so the
+     * database derives it and the two can never disagree.
      */
-    protected static function booted(): void
-    {
-        static::saving(function (self $store): void {
-            if (! $store->isDirty(['latitude', 'longitude'])) {
-                return;
-            }
-
-            $store->setAttribute('location', DB::raw(sprintf(
-                'ST_SetSRID(ST_MakePoint(%.8F, %.8F), 4326)::geography',
-                (float) $store->longitude,
-                (float) $store->latitude,
-            )));
-        });
-    }
-
-    /** Updates the coordinates. The point follows automatically on save. */
     public function setCoordinates(float $latitude, float $longitude, string $source = 'locationiq'): void
     {
         $this->forceFill([

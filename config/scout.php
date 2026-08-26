@@ -1,5 +1,7 @@
 <?php
 
+use App\Models\Product;
+
 return [
 
     /*
@@ -139,16 +141,22 @@ return [
     'meilisearch' => [
         'host' => env('MEILISEARCH_HOST', 'http://localhost:7700'),
         'key' => env('MEILISEARCH_KEY'),
+        /*
+         * Applied by `php artisan scout:sync-index-settings`.
+         *
+         * `category` is filterable so the category narrowing on both search endpoints
+         * happens inside the engine, rather than fetching everything and discarding
+         * most of it in PHP.
+         *
+         * Ranking follows the order of searchableAttributes: a query matching a product
+         * name outranks one that only appears in a specification value.
+         */
         'index-settings' => [
-            // 'users' => [
-            //     'filterableAttributes' => ['id', 'name', 'email'],
-            //     'embedders' => [
-            //         'default' => [
-            //             'source' => 'userProvided',
-            //             'dimensions' => 1536,
-            //         ],
-            //     ],
-            // ],
+            Product::class => [
+                'filterableAttributes' => ['category'],
+                'sortableAttributes' => ['name'],
+                'searchableAttributes' => ['name', 'category', 'description', 'specifications'],
+            ],
         ],
         'model-settings' => [
             // User::class => [

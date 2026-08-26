@@ -132,7 +132,7 @@ final class ProductController extends Controller
         return response()->json([
             'data' => $summary === null ? null : [
                 'summary' => $summary->summary_text,
-                'generated_at' => $summary->generated_at?->toIso8601String(),
+                'generated_at' => $summary->generated_at->toIso8601String(),
             ],
         ]);
     }

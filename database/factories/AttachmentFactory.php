@@ -24,7 +24,7 @@ class AttachmentFactory extends Factory
         return [
             'store_id' => Store::factory(),
             'variant_id' => $variant,
-            'product_id' => fn (array $attributes) => Variant::find($attributes['variant_id'])?->product_id,
+            'product_id' => fn (array $attributes): ?int => Variant::query()->find((int) $attributes['variant_id'])?->product_id,
             // Minor units. 250000 is 2500.00, not 250000.00.
             'price_minor' => $this->faker->numberBetween(50_000, 900_000),
             'currency' => 'LKR',
