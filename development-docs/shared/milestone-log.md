@@ -22,7 +22,7 @@ Update the two status columns as milestones complete. Everything else in this fi
 | Milestone | Backend | Frontend |
 |---|---|---|
 | M0 Foundations | Done, with deferrals | Done |
-| M1 Accounts | Not started | Not started |
+| M1 Accounts | Done | Done |
 | M2 Catalogue read | Not started | Not started |
 | M3 Search | Not started | Not started |
 | M4 Seller onboarding | Not started | Not started |
@@ -145,6 +145,87 @@ Copy this block, fill it in, append it to section 3. Keep entries in chronologic
 ---
 
 > M0 is unusual: neither side depends on the other. The backend builds infrastructure and the error envelope, the frontend builds its shell, route groups, and API client. Both can append an M0 entry independently. From M1 onward the backend entry always precedes the frontend entry for the same milestone.
+
+### M1 Accounts and roles, backend, 2026-08-26
+
+**Shipped.**
+- EP-01 `POST /api/register`, EP-02 `POST /api/login`, EP-03 `POST /api/logout`, EP-04 `GET /api/user`
+- EP-05 `POST /api/password/forgot`, EP-06 `POST /api/password/reset`, EP-07 `PATCH /api/user/location`
+- EP-55 `POST /api/email/verification-notification`, EP-56 `GET /api/email/verify/{id}/{hash}`
+- `UserResource` as the single serialiser for the session user
+- Five form requests reusing the starter's existing `PasswordValidationRules` and `ProfileValidationRules` concerns, so the API and the starter cannot drift on what a valid account is
+
+**Contract.**
+- Contract version at time of writing: 1
+- Changes made to api-contract.md: none. The implementation matched it
+- Error codes now live from this milestone: `validation_failed` (with field `errors`), `unauthenticated`
+
+**Response shapes the frontend should code against.**
+- `POST /api/register` returns **201** with `data.token` and `data.user`
+- `POST /api/login` returns **200** with the same shape
+- `POST /api/logout` returns **204** with no body
+- `GET /api/user` returns `data` as the user object directly: `{ id, name, email, email_verified_at, is_admin, latitude, longitude, store }`
+- `store` is **always null** for now. The stores table lands at M4, so it is hard coded rather than guessed
+- Invalid credentials return **422** `validation_failed` with the message on the `email` key, deliberately not saying which half was wrong
+
+**Deviations from the plan.**
+- **`User` now implements `MustVerifyEmail`.** Without it `event(new Registered)` sends nothing, so the requirement that registration dispatches a verification email could not be met. The starter's Fortify tests still pass.
+- **`User` gained `HasApiTokens`.** Sanctum's `createToken()` does not exist without it.
+- **The verification route is named `api.verification.verify`, not `verification.verify`.** Fortify already owns the bare name for the starter's web route, and two routes sharing a name silently breaks whichever loses. `VerifyEmail::createUrlUsing()` in `AppServiceProvider` points the emailed link at the API route explicitly.
+- **`ResetPassword::createUrlUsing()` points at the frontend**, not the API. The person needs a form to type into and the API has no pages. The link is `{FRONTEND_URL}/reset-password?token=…&email=…`, which is what S-12 must read.
+- **New config `app.frontend_url`, from `FRONTEND_URL`.** Added to `.env` and `.env.example`, defaulting to `http://localhost:3000`.
+- **`is_admin` has a model level default of false** as well as a database default. Without it a freshly created model serialises `is_admin` as null on the registration response, and null is not the same answer as false to a client deriving roles.
+- Two inaccurate PHPDoc annotations in the starter's `ProfileValidationRules` were corrected. `Rule::unique()` returns `Unique`, which does not implement `ValidationRule`, so the declared return type was wrong.
+
+**Known gaps handed to the other side.**
+- `store` is null on every session. Do not build seller navigation against real data until M4.
+- Mail is on the `log` driver, so verification and reset emails land in `storage/logs/laravel.log` rather than an inbox. Grep for `email/verify` or `reset-password` to get a working link.
+- Password rules are relaxed outside production by the starter's `Password::defaults()`, so a short password is accepted locally but not in production.
+
+**Verified by.**
+- 29 M1 tests in `tests/Feature/Api/AuthTest.php`, covering registration validation, duplicate email, the password confirmation, mass assignment of `is_admin`, invalid credentials not revealing which field was wrong, a soft deleted account treated as invalid, logout revoking only the current token, the reset token expiring and being refused on reuse, and a signed verification link replayed against another account
+- `composer test` green: Pint passed, PHPStan level 7 with 0 errors, 101 passed and 9 todo
+- Live against the running server: register issued a token and logged a verification link, `GET /api/user` returned the session user, the location write derived the PostGIS point, out of range coordinates were refused with field errors, a wrong password returned the neutral message, logout returned 204, and the revoked token then returned `unauthenticated`
+
+---
+
+### M1 Accounts and roles, frontend, 2026-08-26
+
+**Shipped.**
+- S-09 `/login`, honouring `?next=` and refusing any absolute URL there
+- S-10 `/register`, with a dedicated path for an address that already has an account
+- S-11 `/forgot-password`, whose confirmation copy is identical either way
+- S-12 `/reset-password`, reading `token` and `email` from the emailed link
+- S-13 `/verify-email` with resend, redirecting away when already verified
+- S-16 `/account` with the profile summary and the saved location
+- X-03 `LocationPrompt`, browser geolocation with manual entry as an equal path
+- `lib/api/auth.ts`, `lib/location/geolocation.ts`, and the `(auth)` layout
+- Route handlers `/api/auth/register` and **`/api/proxy/[...path]`**
+
+**Contract.**
+- Contract version at time of writing: 1
+- Changes made to api-contract.md: none
+- Error codes handled on screen: `validation_failed` with per field errors, `rate_limited` with a wait message, `unauthenticated`
+
+**Deviations from the plan.**
+- **An authenticated API proxy was added at `/api/proxy/[...path]`, and this was not optional.** The plan had browser calls going to Laravel directly with `credentials: 'include'`. That cannot work here. The token is in an httpOnly cookie on `localhost:3000`, and a browser will not send that cookie to `localhost:8000`, nor can JavaScript read it to attach a Bearer header, because httpOnly is the entire point. Every authenticated browser call therefore goes through this application's own origin, where the handler reads the cookie server side and attaches the Bearer header. The token stays out of JavaScript and out of the network tab. Public catalogue reads do not use the proxy and will be fetched server side, which keeps them cacheable.
+- `lib/api/client.ts` was changed to point browser calls at `/api/proxy` and to use `credentials: 'same-origin'`. `apiFetchServer` still calls Laravel directly.
+- Auth screens are marked `robots: { index: false }`, matching the indexing rules.
+- S-09, S-12, and S-13 are wrapped in `Suspense` because they read `useSearchParams`, which otherwise opts the route out of prerendering.
+
+**Known gaps handed to the other side.**
+- Nothing blocking.
+- Every seller entry in the navigation is still unreachable, because `store` is null until M4. This is expected, not a bug.
+
+**Verified by.**
+- `npm run build` clean, 15 routes, `/` still static with a 1h revalidate
+- `npm run lint` and `npx tsc --noEmit` clean
+- Live against the running Laravel API, with a cookie jar: registration set an **httpOnly** `auth_token` cookie (confirmed by the `#HttpOnly_` prefix in the jar); the session endpoint returned the user; the proxy attached the Bearer token and returned the same user; **the proxy without the cookie returned `unauthenticated`**; the location write persisted and came back on the user
+- Logout returned 204 and the session then resolved to null; login restored it; a wrong password returned the neutral message that does not say which half was wrong
+- `/account` returned 200 when signed in and 307 to `/login?next=%2Faccount` when signed out
+- The full reset cycle end to end: requested a link, pulled the real token from the mail log, reset the password, confirmed the old password stopped working, confirmed the new one worked, and confirmed reusing the same token was refused
+
+---
 
 ---
 
