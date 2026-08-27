@@ -1,6 +1,6 @@
 # API Contract
 
-**Contract version:** 5
+**Contract version:** 6
 **Owner:** the backend repository
 **Status:** authoritative
 
@@ -543,7 +543,7 @@ EP-25 answers the updated attachment:
 }
 ```
 
-Saved at **variant level, not product level**, because a price alert is only meaningful for a specific combination. `lowest_price_minor` is the cheapest available listing for that variant right now and is **null when nobody carries it**, which is a normal state rather than an error: a buyer may save a combination no seller stocks yet, and being told when one appears is the point.
+Saved at **variant level, not product level**, because a price alert is only meaningful for a specific combination. `lowest_price_minor` is the cheapest available listing for that variant right now and is **null when nobody carries it**, which is a normal state rather than an error: a buyer may save a combination no seller stocks yet, and being told when one appears is the point. **`currency` is null alongside it**, on the same rows and for the same reason: with no listing there is nothing to take a currency from. The two are always null together and never one without the other.
 
 **The wishlist add request**, accepted by EP-37:
 
@@ -564,6 +564,82 @@ Neither alert has an endpoint. There is no notification surface in this platform
 
 ---
 
+### 11.10 Community and verification
+
+**Posting requires ownership of the product being discussed**, proven by photograph, and proven **per product**. Verification of one product grants nothing on another. This is the whole reason the community is worth reading: every participant has demonstrably held the thing they are talking about.
+
+**The post**, returned by EP-31 and EP-57. Both use cursor pagination per section 2, not page numbers.
+
+```json
+{
+  "id": 412,
+  "body": "The battery lasts about two days on light use.",
+  "author": { "name": "Nadia" },
+  "reply_count": 3,
+  "created_at": "2026-08-27T09:00:00Z"
+}
+```
+
+The author is a **display name only**. There is no user id, no email, and no store: a user who happens to run a store posts as a verified buyer like anyone else, and naming their store here would turn a discussion into advertising.
+
+There is no `is_verified` flag on a post, because an unverified author cannot post at all. A flag whose value is always true is a field that will eventually be false by accident.
+
+`reply_count` is present on top level posts so a client knows whether to offer EP-57. Replies do not nest further: a reply carries `reply_count: 0` always, and no endpoint accepts a reply to a reply.
+
+**Soft deleted posts are absent entirely**, and so are their replies. A post removed by an administrator does not appear as a tombstone, and its thread does not survive it.
+
+**EP-32 creates a post.**
+
+```json
+{ "body": "Mine has the same rattle.", "parent_id": 412 }
+```
+
+`body` is required. `parent_id` is optional: omitted for a top level post, set to a top level post's id for a reply. A `parent_id` naming a reply is refused, because threads are one level deep.
+
+Refused with **403 `not_verified`** when the caller has not verified ownership of that product. The check is against this product, always.
+
+**EP-33 is the state the composer renders from**, and it carries enough to answer every case without the client inferring anything.
+
+```json
+{
+  "data": {
+    "is_verified": false,
+    "attempts_used": 2,
+    "attempts_remaining": 3,
+    "can_attempt": true,
+    "latest_outcome": "failed",
+    "pending_code": null,
+    "pending_job_id": null
+  }
+}
+```
+
+`attempts_used` counts every concluded attempt for this user on this product. The ceiling is **five, per user per product**, and `attempts_remaining` is what is left of it. `can_attempt` is false once the ceiling is reached or the caller is already verified, and it is a rendering hint: EP-34 and EP-35 re-check and refuse with **403 `attempts_exhausted`** regardless of what the client believed.
+
+`latest_outcome` is `passed`, `failed`, `pending`, or null when nothing has been attempted. `pending_code` is set when a verification has been started but not yet submitted, so a buyer who closed the page can be shown the code again rather than burning an attempt to get a new one. `pending_job_id` is set when a submission is queued behind a provider failure, and is what the queued job panel resumes from.
+
+**EP-34 starts an attempt** and issues the code the buyer must photograph.
+
+```json
+{ "data": { "code": "VX-7T2K", "attempts_remaining": 3, "expires_at": "2026-08-27T10:00:00Z" } }
+```
+
+The buyer writes the code on paper, photographs it beside the product, and submits that photograph. The code is what makes the photograph evidence of present possession rather than an image found online. **Starting does not consume an attempt**; submitting does, so a buyer who starts and walks away loses nothing.
+
+**EP-35 submits the photograph**, as `multipart/form-data` carrying `photo`. Accepts JPEG, PNG, or WebP up to 5 MB, refused with `unsupported_media_type` or `file_too_large` as in section 7.
+
+```json
+{ "data": { "outcome": "passed", "reason": "The code matches and the product is visible.", "attempts_remaining": 2 } }
+```
+
+`outcome` is `passed` or `failed`. A failure is an ordinary outcome, not an error, and answers **200 rather than 4xx**: the request succeeded, and the answer was no.
+
+**The photograph is deleted the moment verification concludes, whether it passed or failed.** No response on any endpoint at any access level contains a photograph path, a URL, or the file itself. Section 6 lists this alongside the confidence score. `reason` is retained after the photograph is destroyed, so a failure can still be explained to the buyer who is deciding whether to spend another attempt.
+
+Provider failure follows section 8: **503 with `ai_unavailable` and a top level `queued_job_id`**. The photograph survives only until the queued job concludes, which then deletes it on the same terms.
+
+---
+
 ## 12. Change log
 
 | Version | Date | Change |
@@ -573,3 +649,4 @@ Neither alert has an endpoint. There is no notification surface in this platform
 | 3 | 2026-08-27 | M6. Added `confirmation_outcome` to `result_type` in section 8, which a queued confirmation submit completes as. Section 11.4 is unchanged and is what EP-22 returns |
 | 4 | 2026-08-27 | M7. Added section 11.8, the proposal list item, the detail with its change comparison, and the vote request body. EP-27 and EP-28 paginate per section 2. No existing shape changed |
 | 5 | 2026-08-27 | M8. Added section 11.9, the attachment update request and response, the detach response carrying `store_is_live`, the wishlist item, and the wishlist add request. EP-36 paginates per section 2. Recorded that a repeated wishlist add answers the existing item rather than failing. No existing shape changed |
+| 6 | 2026-08-27 | M9. Added section 11.10, the community post, the post creation request, and the three verification shapes. EP-31 and EP-57 use cursor pagination per section 2. Clarified that a wishlist item's `lowest_price_minor` and `currency` are null together when nobody carries the variant, closing the M8 open request. `verification_result` and the `not_verified` and `attempts_exhausted` codes were already registered and are unchanged |

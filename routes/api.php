@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\AiJobController;
 use App\Http\Controllers\Api\AttachController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CategoryController;
+use App\Http\Controllers\Api\CommunityController;
 use App\Http\Controllers\Api\ConfirmationController;
 use App\Http\Controllers\Api\EmailVerificationController;
 use App\Http\Controllers\Api\ListingController;
@@ -17,6 +18,7 @@ use App\Http\Controllers\Api\SearchController;
 use App\Http\Controllers\Api\SellerStoreController;
 use App\Http\Controllers\Api\StoreController;
 use App\Http\Controllers\Api\UserController;
+use App\Http\Controllers\Api\VerificationController;
 use App\Http\Controllers\Api\WishlistController;
 use Illuminate\Support\Facades\Route;
 
@@ -73,7 +75,19 @@ Route::middleware(['public', 'throttle:catalogue'])->group(function (): void {
      */
     Route::get('/stores/{store}', [StoreController::class, 'show'])->whereNumber('store');
 
-    // M9  EP-31, EP-57
+    /*
+     * M9 The discussion, EP-31 and EP-57.
+     *
+     * Public and session free, like the rest of the catalogue. Reading needs no account:
+     * the value of a verified discussion is to the person deciding what to buy, and
+     * putting it behind a login would hide it from exactly them.
+     *
+     * Writing is a different matter entirely and lives in the Auth group.
+     */
+    Route::get('/products/{product}/community/posts', [CommunityController::class, 'index']);
+    Route::get('/products/{product}/community/posts/{post}/replies', [CommunityController::class, 'replies'])
+        ->whereNumber('post');
+
     // M10 EP-52
 });
 
@@ -153,7 +167,32 @@ Route::middleware('auth:sanctum')->group(function (): void {
         ->whereNumber('item')
         ->middleware('throttle:writes');
 
-    // M9  EP-32, EP-33, EP-34, EP-35
+    /*
+     * M9 Verification and posting, EP-32 to EP-35.
+     *
+     * Auth rather than Seller: this is a buyer capability, and a user who runs a store
+     * uses it as a verified buyer like anyone else.
+     *
+     * Verification is scoped to a product every time. Verifying one grants nothing on
+     * another, so every route here is bound to a product and none of them is a
+     * capability the account carries around.
+     */
+    Route::post('/products/{product}/community/posts', [CommunityController::class, 'store'])
+        ->middleware('throttle:writes');
+
+    Route::get('/products/{product}/verification', [VerificationController::class, 'show']);
+
+    Route::post('/products/{product}/verification/start', [VerificationController::class, 'start'])
+        ->middleware('throttle:verification');
+
+    /*
+     * Behind the `verification` limiter, which is 5 per minute per actor. The real
+     * ceiling is the five attempts per product enforced in the service; this only stops
+     * somebody hammering the provider with photographs faster than a person could take
+     * them.
+     */
+    Route::post('/products/{product}/verification/submit', [VerificationController::class, 'submit'])
+        ->middleware('throttle:verification');
 });
 
 /*

@@ -399,6 +399,117 @@ final class AnthropicAiProvider implements AiProvider
      *
      * @throws AiUnavailable
      */
+    /**
+     * Judge a verification photograph.
+     *
+     * Both halves are checked in one call and the prompt says so explicitly, because a
+     * model asked only "is this the product" will happily pass a photograph with no
+     * code in it, and the code is the entire reason the photograph is evidence of
+     * present possession rather than a picture from the internet.
+     */
+    public function verifyOwnership(
+        Product $product,
+        string $code,
+        string $photo,
+        string $mimeType,
+    ): OwnershipAssessment {
+        $specifications = json_encode($product->specifications ?? [], JSON_THROW_ON_ERROR);
+
+        $prompt = <<<PROMPT
+            You are checking whether somebody physically has a product.
+
+            They were asked to write a code on paper and photograph it beside the
+            product. Both must be true for a pass:
+
+            1. The handwritten code in the photograph reads exactly {$code}.
+            2. The product in the photograph is this product.
+
+            A photograph showing only the code passes neither test. A photograph of a
+            different product with the right code fails. A screenshot or a product
+            photograph from a website fails: we are checking possession, not knowledge.
+
+            Be forgiving about handwriting, lighting, and angle. Be strict about which
+            product it is and about the code being present and correct.
+
+            The product:
+            Name: {$product->name}
+            Category: {$product->category}
+            Description: {$product->description}
+            Specifications: {$specifications}
+
+            Reply with JSON only, in the form
+            {"passed": true, "reason": "one short sentence for the buyer"}.
+
+            The reason is shown to the person who submitted the photograph, so write it
+            to them. Say what was missing or wrong. Do not describe your reasoning.
+            PROMPT;
+
+        $decoded = $this->ask([
+            ['type' => 'text', 'text' => $prompt],
+            [
+                'type' => 'image',
+                'source' => [
+                    'type' => 'base64',
+                    'media_type' => $mimeType,
+                    // Bytes, not a path. Nothing here learns where the file lived, and
+                    // the caller deletes it the moment this returns.
+                    'data' => base64_encode($photo),
+                ],
+            ],
+        ], maxTokens: 256);
+
+        $passed = (bool) ($decoded['passed'] ?? false);
+        $reason = trim((string) ($decoded['reason'] ?? ''));
+
+        if ($reason === '') {
+            $reason = $passed
+                ? 'The code and the product are both visible.'
+                : 'The photograph did not clearly show the code beside the product.';
+        }
+
+        return $passed ? OwnershipAssessment::passed($reason) : OwnershipAssessment::failed($reason);
+    }
+
+    /**
+     * Summarise a product's discussion.
+     *
+     * Told plainly not to produce a rating. The platform has no star score anywhere,
+     * and a model left to its own devices will reach for one.
+     */
+    public function summariseCommunity(Product $product, array $posts): string
+    {
+        $joined = implode('
+
+', array_map(
+            static fn (string $body): string => '- '.trim($body),
+            $posts,
+        ));
+
+        $prompt = <<<PROMPT
+            Summarise what owners are saying about {$product->name}.
+
+            Write two or three sentences describing what recurs: what owners agree on,
+            what they disagree about, and any problem mentioned more than once.
+
+            Do not give a rating, a score, a star count, or a recommendation. Do not
+            invent anything that is not in the comments. Where the comments are too few
+            or too varied to summarise, say so plainly.
+
+            Write it as a standing description of the discussion, not as a reply to the
+            newest comment.
+
+            The comments:
+            {$joined}
+
+            Reply with JSON only, in the form {"summary": "..."}.
+            PROMPT;
+
+        $decoded = $this->ask([['type' => 'text', 'text' => $prompt]], maxTokens: 512);
+
+        return trim((string) ($decoded['summary'] ?? ''));
+    }
+
+    /** @return array{type: string, source: array{type: string, media_type: string, data: string}} */
     private function imageBlock(string $path): array
     {
         $bytes = @file_get_contents($path);

@@ -242,6 +242,63 @@ final class FakeAiProvider implements AiProvider
         return $shared / min(count($leftWords), count($rightWords));
     }
 
+    /**
+     * Verification, decided by what the code says rather than by looking at anything.
+     *
+     * A fake cannot read a photograph, so it needs a rule a test can steer. The rule is
+     * the **photograph bytes**: a submission whose content contains the issued code
+     * passes, and anything else fails. Tests write the code into the file they upload
+     * to pass, and write something else to fail.
+     *
+     * That keeps both outcomes reachable deterministically, which matters more here
+     * than realism: the milestone's real assertions are that the photograph is deleted
+     * either way and that five attempts is a ceiling, and both need a failure that can
+     * be produced on demand.
+     */
+    public function verifyOwnership(
+        Product $product,
+        string $code,
+        string $photo,
+        string $mimeType,
+    ): OwnershipAssessment {
+        if ($this->shouldFail) {
+            throw AiUnavailable::because('the fake provider is configured to fail');
+        }
+
+        if (str_contains($photo, $code)) {
+            return OwnershipAssessment::passed(
+                "The code {$code} is legible and {$product->name} is visible beside it.",
+            );
+        }
+
+        return OwnershipAssessment::failed(
+            'The code was not legible in the photograph. Write it clearly and try again.',
+        );
+    }
+
+    /**
+     * A summary assembled rather than written.
+     *
+     * Deliberately says nothing evaluative and produces no rating, so a test asserting
+     * that the platform emits no score anywhere cannot be defeated by the fake.
+     */
+    public function summariseCommunity(Product $product, array $posts): string
+    {
+        if ($this->shouldFail) {
+            throw AiUnavailable::because('the fake provider is configured to fail');
+        }
+
+        $count = count($posts);
+
+        if ($count === 0) {
+            return "Nobody has posted about {$product->name} yet.";
+        }
+
+        return $count === 1
+            ? "One owner has written about {$product->name} so far."
+            : "{$count} owners have written about {$product->name}, covering how it performs in day to day use.";
+    }
+
     /** @return array<int, string> */
     private function words(string $text): array
     {

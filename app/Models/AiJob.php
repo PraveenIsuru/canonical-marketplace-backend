@@ -63,6 +63,15 @@ class AiJob extends Model
      */
     public const TYPE_CONFIRMATION_OUTCOME = 'confirmation_outcome';
 
+    /**
+     * M9. What a queued verification judgement completes as.
+     *
+     * Its result is the outcome and the reason, exactly as EP-35 would have returned
+     * them. It never carries the photograph or where it was: the file is deleted the
+     * moment the job concludes, on a pass and on a failure alike.
+     */
+    public const TYPE_VERIFICATION_RESULT = 'verification_result';
+
     /** @return BelongsTo<User, $this> */
     public function user(): BelongsTo
     {

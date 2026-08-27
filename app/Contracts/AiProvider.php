@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Services\Ai\AiUnavailable;
 use App\Services\Ai\ConfidenceAssessment;
 use App\Services\Ai\ConfirmationQuestion;
+use App\Services\Ai\OwnershipAssessment;
 use App\Services\Ai\ProductDraft;
 use App\Services\Ai\ProductMatchCandidate;
 use App\Services\Ai\SearchInterpretation;
@@ -118,4 +119,49 @@ interface AiProvider
      * @throws AiUnavailable
      */
     public function scoreConfirmationAnswers(array $questions, array $answers): ConfidenceAssessment;
+
+    /**
+     * Judge whether a photograph shows this product beside the code we issued.
+     *
+     * The code is what makes the photograph evidence of **present possession** rather
+     * than an image found online, so an implementation must check both halves: that the
+     * code is legible and correct, and that the product in frame is this product.
+     * Passing on the code alone would verify a handwritten note.
+     *
+     * The photograph is passed as raw bytes rather than a path, deliberately. Nothing
+     * downstream of this call needs to know where the file lived, and a method taking a
+     * path invites an implementation that keeps one.
+     *
+     * The caller deletes the photograph the moment this returns, on a pass and on a
+     * failure alike, so an implementation must not retain it.
+     *
+     * @param  string  $photo  raw image bytes
+     * @param  string  $mimeType  the image's media type, for the vision request
+     *
+     * @throws AiUnavailable
+     */
+    public function verifyOwnership(
+        Product $product,
+        string $code,
+        string $photo,
+        string $mimeType,
+    ): OwnershipAssessment;
+
+    /**
+     * Summarise what buyers are saying about a product.
+     *
+     * Reads the discussion and reports the shape of it: what owners agree on, what they
+     * disagree about, and what recurs. It is regenerated periodically rather than on
+     * every post, so it must read as a standing description rather than as a reply to
+     * the newest comment.
+     *
+     * It is **not** a rating and must not produce one. The platform has no star score
+     * and no sentiment number anywhere, and reducing a discussion to a figure would
+     * invite exactly the comparison the canonical catalogue exists to avoid.
+     *
+     * @param  array<int, string>  $posts  post bodies, newest last
+     *
+     * @throws AiUnavailable
+     */
+    public function summariseCommunity(Product $product, array $posts): string;
 }

@@ -29,8 +29,8 @@ Update the two status columns as milestones complete. Everything else in this fi
 | M5 Wizard | Done | Done |
 | M6 Confirmation and proposals | Done | Done |
 | M7 Peer review | Done | Done |
-| M8 Listings and wishlist | Done | Not started |
-| M9 Community and verification | Not started | Not started |
+| M8 Listings and wishlist | Done | Done |
+| M9 Community and verification | Done | Not started |
 | M10 Analytics and versions | Not started | Not started |
 | M11 Administration | Not started | Not started |
 | M12 Caching and revalidation | Not started | Not started |
@@ -1038,6 +1038,128 @@ Distance is decided in PostGIS with `ST_DWithin` against the buyer's own coordin
 
 ---
 
+### M8 Listings and wishlist, frontend, 2026-08-27
+
+**Shipped.**
+- S-21 completed: `components/seller/ListingRow.tsx`, an editable price, an availability toggle, and detach on `/listings`
+- S-14 `/wishlist`, the buyer's saved variants
+- X-06 `components/system/RequiresLogin.tsx`, wrapping the save action on the product page
+- The wishlist affordance on S-04 is live and targets the **selected variant**
+- `lib/api/wishlist.ts`, `lib/schemas/wishlist.ts`, `types/wishlist.ts`
+- The M5 copy on the listings screen saying price editing was still being built is replaced by the real controls
+
+**Contract.**
+- Contract version at time of writing: 5
+- Changes made to api-contract.md: none. This side mirrors it
+- Error codes handled on screen: `validation_failed` (422, keyed on `price_minor`), and 404 for a listing that is not the caller's
+- One nullability the contract does not state is handled and raised as an open request, below
+
+**`currency` is nullable on a wishlist item, and 11.9 does not say so.**
+
+The example in section 11.9 shows `"currency": "LKR"` beside a populated price. The API returns **null for both** when nobody carries the variant, which is the state the same section describes in prose two paragraphs later. The schema mirrors what the API actually does, because refusing null there would break the wishlist's most ordinary state, and it is raised for the backend to write down rather than left as a silent divergence.
+
+**How the dark store warning works, which is the part worth getting right.**
+
+A store is visible to buyers only while it holds at least one attachment, so a seller removing their last listing makes their own store invisible. That is warned about **twice, deliberately**:
+
+- **Before**, in the detach dialog, computed from the listings already on screen. The count is over **attachments across all products**, not products, because a seller removing the second of two versions of one product is removing their last attachment just the same.
+- **After**, from `store_is_live` in the EP-26 response. This is the authoritative answer and it is why the endpoint returns the flag at all. A notice appears at the top of the screen saying the store has gone dark, rather than the seller discovering it later from a dashboard that happens to reload.
+
+A warning that only arrives after the fact is not a warning, and one that only arrives before it is a guess. Both, from different sources, is the honest arrangement.
+
+**Deviations from the plan.**
+- **Only what changed is sent to EP-25.** The row tracks price and availability separately and sends whichever the seller actually touched. Restating an untouched price would look like a price change to the alert logic behind it, and a seller marking something out of stock would send buyers an email about a price that never moved.
+- **Zero and negative prices are refused before the round trip**, by the existing `parseMoneyToMinor`, which already returned null for them. The server side refusal is handled too and rendered from `errors.price_minor`, as a backstop rather than the normal path.
+- **X-06 wraps the action rather than guarding the route.** The public catalogue is browsable with no account, and turning a product page into a login wall because it carries one saveable control would trade the whole public catalogue for one button. An anonymous visitor sees the same control and choosing it signs them in and brings them back.
+- **The intent survives the login round trip.** The return path carries `?save=<variant>`, and the product page finishes the save once on arrival. A visitor who picked the 256GB and then signed in gets the 256GB saved, not the default.
+- **A repeat save is reported as saved, never as a conflict.** EP-37 answers 200 with the existing item, so there is no error path in the interface for it and none should be added.
+- **The listings screen says what a seller may not change, once, at the bottom.** Price and stock are theirs; the description, the specifications, and the versions are shared by everyone selling the record and move only through a proposal. Saying so is better than leaving the seller to infer it from an absence.
+- **Removal on the wishlist is not optimistic.** It invalidates and refetches. An optimistic remove that failed would put the row back with no explanation, and the list is small enough that the round trip is not felt.
+
+**Known gaps handed to the other side.**
+- **Nothing blocking on the backend.**
+- **The alerts have no screen and never will.** Invariant 10 holds: email only, no bell, no notification centre. A buyer who does not read the email does not find out, and the wishlist page says so plainly rather than implying a history exists somewhere.
+- **A nearby stock alert silently does nothing for a buyer with no location.** The wishlist page links to the account screen to add one, but nothing on screen tells a buyer their saved items are only half working. Worth revisiting if it proves confusing.
+- **Detach has no undo.** Re-listing means going back through the confirmation questions, and the dialog says so.
+- **A price the seller changes is not reflected in a cached catalogue page** until M12 wires revalidation. Locally there is no cache, so this is a note for later rather than a current fault.
+- X-04 still links to `/analytics`, which is M10 and remains a dead link. `/wishlist` and `/listings` are both live.
+- Escalated proposals are still a dead end until M11, unchanged by this milestone.
+
+**Verified by.**
+- `npm run docs:check`, `npx tsc --noEmit`, `npm run lint`, and `npm run build` all clean, with `/products/[slug]` still statically generated and no Suspense or deopt warnings
+- Against the live API through the authenticated proxy:
+  - A seller changed a listing to **2500 and out of stock**, and both persisted on a refetch of EP-19
+  - **0 and -5 were refused with 422** and `errors.price_minor` reading "A price must be greater than zero"
+  - Detaching one of several listings answered **`store_is_live: true`**; detaching a store's **last** listing answered **`store_is_live: false`**, after which the store answered 404 publicly and the product still answered with `seller_count: 8`
+  - A wishlist add and an immediate repeat both answered **200 with the same item id**
+  - EP-36 returned both states in one list: a priced item at `235000 LKR` from 8 sellers, and one with **`lowest_price_minor: null`, `currency: null`, `seller_count: 0`**
+  - Removal answered `{"removed": true}`
+- `/wishlist` and `/listings` render 200 for a signed in user and **307 to `/login?next=…`** anonymously, while `/products/{slug}` stays **200 with no token**, so invariant 7 is intact
+
+---
+
+### M9 Community and verification, backend, 2026-08-27
+
+**Shipped.**
+- EP-31 `GET /api/products/{slug}/community/posts`, EP-57 `GET .../posts/{id}/replies`, EP-32 `POST .../posts`
+- EP-33 `GET /api/products/{slug}/verification`, EP-34 `POST .../verification/start`, EP-35 `POST .../verification/submit`
+- `VerificationService`, `CommunityService`, `VerificationController`, `CommunityController`
+- `AiProvider` grew `verifyOwnership` and `summariseCommunity`, implemented in both adapters, with an `OwnershipAssessment` value object
+- `CompleteVerification` for the queued path, `SummariseCommunity` for the summary, and the `verification:cleanup` command scheduled daily
+- `VerificationAttempt` and `CommunityPost` models over tables that had existed unused since M0
+
+**Contract.**
+- Contract version at time of writing: **bumped from 5 to 6**
+- Changes made to api-contract.md: added **section 11.10**, the post shape, the post creation request, and the three verification shapes. Also stated in 11.9 that a wishlist item's `currency` is null alongside `lowest_price_minor`, which **closes the M8 open request** the frontend raised
+- Error codes now live from this milestone: `not_verified` and `attempts_exhausted`. Both were registered in section 7 since version 1 and are reachable for the first time now. `verification_result` was already in the `result_type` union and needed no change
+
+**No migration was needed, and that is the second time M0 paid off.**
+
+`verification_attempts` and `community_posts` were both created at M0 with exactly the right columns, including `photo_deleted_at`, `attempt_number`, and soft deletes on posts. The M0 migration comment even specifies the design this milestone had to implement: *"No column holds the photograph path… the path lives transiently in the queued job payload only."* That is precisely what `VerificationQueued` and `CompleteVerification` do.
+
+**The photograph, which is the invariant that matters most here.**
+
+Deleted the moment verification concludes, **on a pass and on a failure alike**, with `photo_deleted_at` stamped. There is exactly one method that concludes an attempt and exactly one that deletes a photograph, and both the synchronous and the queued path go through them, so the two cannot drift.
+
+Three further paths were closed rather than assumed:
+
+- **The provider never recovers.** `CompleteVerification::failed()` deletes the photograph anyway. It was collected for one purpose, that purpose can no longer be served, and keeping it because the judgement failed would be the one way a photograph outlives its verification. The attempt is left `pending`, so the buyer has not spent one of their five on the platform's outage.
+- **A worker dies mid job.** `verification:cleanup` sweeps orphans older than six hours, scheduled daily. Age is read from the file rather than from any row, because the row deliberately does not know the path.
+- **A retry finds the file already gone.** Deletion is tolerant of a missing file. The goal is that it is gone, and it being gone already satisfies that.
+
+No response on any path carries a path, a URL, or the file. A test reads the raw bodies of all three verification endpoints as text and refuses `attempts/`, `verification-photos`, `photo_path`, and `.jpg`.
+
+**Deviations from the plan.**
+- **Starting an attempt consumes nothing; only a concluded submission does.** A buyer who starts, cannot photograph the product today, and comes back tomorrow has lost none of their five. Restarting returns the **same code** rather than issuing a new one, so a refresh does not invalidate what they have already written on paper.
+- **A failed verification answers 200, not a 4xx.** The request succeeded and the answer was no. A buyer who photographed the wrong thing has not made a bad request, and the client should not have to treat a normal outcome as an error.
+- **The upload uses the shared `ImageUpload::assertAcceptable` rather than Laravel validation rules.** The contract registers `unsupported_media_type` and `file_too_large` as codes in their own right, and a `mimetypes:` or `max:` rule would return `validation_failed` instead. The client branches on the code, so a wrong sized photograph and a missing field must not look identical to it.
+- **`CommunityPostResource` carries a display name and nothing else.** No user id, no email, and **no store**. A user who runs a store posts as a verified buyer, and naming their store would turn a discussion into advertising. There is a test asserting the store name appears nowhere in the body.
+- **There is no `is_verified` flag on a post.** An unverified author cannot post at all, so the field would always be true, and a field that is always true is one that will eventually be false by accident.
+- **Threads are one level deep.** A `parent_id` naming a reply is refused. A tree on a product discussion is harder to read than a flat list and nothing asked for one.
+- **EP-57 refuses when the parent is soft deleted.** Eloquent hides the parent on its own but would happily serve its children, leaving half a conversation with its subject missing. The parent lookup is what makes "deleted posts are hidden along with their replies" true rather than half true.
+- **The summary is regenerated on each new post rather than on a schedule**, so it follows the discussion rather than the clock. Queued and never awaited: a provider outage must not fail a post that is already written, and a summary a few posts behind is a perfectly good state. Below three posts it writes nothing, because summarising two comments produces a sentence longer than the thing it summarises.
+- **A provider failure during summarisation leaves the previous summary in place** and returns no error anywhere. Nobody is waiting on it, and yesterday's summary beats none. This is the one AI path in the platform that neither degrades nor queues, because there is no user in the loop to tell.
+- **The summary prompt forbids a rating explicitly.** The platform has no star score and no sentiment number, and a model left to itself reaches for one. A test asserts no summary response contains `rating`, `score`, or `stars`.
+
+**Known gaps handed to the other side.**
+- **Nothing blocking. S-06 and S-15 are both unblocked, and X-01 has a fifth flow to cover.**
+- **EP-33 is the only thing the composer should branch on.** It carries `is_verified`, `attempts_used`, `attempts_remaining`, `can_attempt`, `latest_outcome`, `pending_code`, and `pending_job_id`, which between them answer every state without the client inferring anything. `can_attempt` is a rendering hint: EP-34 and EP-35 re-check and refuse regardless.
+- **`pending_code` exists so a buyer who closed the page can be shown their code again.** Without surfacing it they would reasonably assume they had to start over.
+- **Exhausting five attempts is final.** No appeal, no administrator reset, no way to buy more, and none of those should be built: they are on the list of things deliberately absent.
+- **A verification photograph is never shown back to the buyer**, including immediately after upload. There is nothing to preview, by design.
+- **Administrator post deletion is M11.** Soft deletes work and are respected by every read here, but EP-44 does not exist, so nothing can currently remove a post.
+- **The mail driver is still `log` locally**, and the queue worker must be running for a queued verification to ever conclude. The scheduler must be running for the photograph sweep: `php artisan schedule:work` locally, cron in deployment.
+- Escalated proposals remain a dead end until M11, unchanged by this milestone.
+
+**Verified by.**
+- 27 tests in `tests/Feature/Api/CommunityTest.php`
+- The build plan's stated M9 list, item by item: posting refused with `not_verified` without verification of that specific product, verification of one product granting nothing on another **and** one buyer's exhausted attempts leaving another buyer free, the ceiling of five enforced per user per product with `attempts_exhausted` afterwards, **the photograph deleted on both the passing and the failing path** with `photo_deleted_at` set and the disk empty in each case, no photograph path in any response body read as raw text, and a soft deleted post hidden along with its replies
+- The queued path proven end to end: a provider failure returns **503 `ai_unavailable`** with the job id at the top level per section 8, the photograph survives, the attempt stays `pending` and unspent, `pending_job_id` is reported by EP-33, and `failed()` deletes the photograph when the provider never recovers
+- The sweep proven to leave a recent file alone and remove one older than the threshold
+- `composer test` green: Pint passed, PHPStan level 7 with **0 errors**, 372 tests with 366 passed and 5 todo
+
+---
+
 ## 4. Open requests
 
 Things one side needs from the other that are not yet built. Remove a row only when it has shipped and been recorded in section 3.
@@ -1052,5 +1174,7 @@ Things one side needs from the other that are not yet built. Remove a row only w
 | Frontend | 2026-08-27 | **S-26 and S-27 could not be built at M6.** The build plan lists them under this milestone, but S-26 needs EP-27 and S-27 needs EP-29, both of which are M7. Building either would have meant inventing a shape the backend has not defined. They should be built alongside M7's own screens once those endpoints land, and the "still being built" copy on the S-24 outcome panel and in X-05 replaced with real links then | **Closed 2026-08-27.** Both shipped at frontend M7 against EP-27 and EP-29. S-27 shares the `/proposals/[id]` route with S-29, because EP-29 serves the proposer and the reviewers from one id. The "still being built" copy on the S-24 outcome panel and in X-05 is replaced by real links |
 
 | Backend | 2026-08-27 | **Nothing resolves an escalated proposal.** The matrix escalates on a tie, on no votes at all, and on high confidence with peers against, and EP-41 and EP-42 that act on that are M11. A seller whose proposal escalates stays blocked with no route out | Open. Not blocking the frontend, which renders escalated as a blocked state already. Blocking for the seller it happens to |
+
+| Frontend | 2026-08-27 | **Section 11.9 does not state that a wishlist item's `currency` is nullable.** The example shows a populated pair, and the API returns `lowest_price_minor: null` and `currency: null` together when nobody carries the variant, which the same section describes in prose. The frontend schema mirrors the API. Worth writing the null case into the example or a sentence so the next client does not refuse it | **Closed 2026-08-27.** Contract version 6 states it in section 11.9: `lowest_price_minor` and `currency` are always null together and never one without the other |
 
 Use this table rather than guessing. A frontend screen that needs a field the contract does not define adds a row here. It does not invent a field name and hope.
