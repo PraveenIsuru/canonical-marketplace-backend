@@ -28,8 +28,8 @@ Update the two status columns as milestones complete. Everything else in this fi
 | M4 Seller onboarding | Done | Done |
 | M5 Wizard | Done | Done |
 | M6 Confirmation and proposals | Done | Done |
-| M7 Peer review | Done | Not started |
-| M8 Listings and wishlist | Not started | Not started |
+| M7 Peer review | Done | Done |
+| M8 Listings and wishlist | Done | Not started |
 | M9 Community and verification | Not started | Not started |
 | M10 Analytics and versions | Not started | Not started |
 | M11 Administration | Not started | Not started |
@@ -918,6 +918,126 @@ Two rows the table does not have, both escalating: a **tie** (`tie_no_majority`)
 
 ---
 
+### M7 Peer review, frontend, 2026-08-27
+
+**Shipped.**
+- S-26 `/proposals`, the seller's own proposals, from EP-27
+- S-28 `/proposals/to-review`, the review queue, from EP-28
+- S-27 and S-29 `/proposals/[id]`, the change comparison and the vote, from EP-29 and EP-30
+- `components/proposal/ChangeComparison.tsx`, `ProposalRow.tsx`, `ProposalStatusBadge.tsx`
+- `lib/api/proposals.ts`, `lib/schemas/proposal.ts`, and a rewritten `types/proposal.ts`
+- The S-24 outcome panel and X-05 now link to a real review page instead of saying one is still being built
+- X-04's `/proposals` entry, a dead link since M0, is live
+
+**Contract.**
+- Contract version at time of writing: 4
+- Changes made to api-contract.md: none. This side mirrors it
+- Error codes handled on screen: `not_eligible_to_vote` (403), `already_voted` (409), `review_closed` (409), and 404 from EP-29
+- Section 11.8 is mirrored field for field. Section 11.6 drives what the screen shows after a vote
+
+**S-27 and S-29 are one route, and that is the significant design call.**
+
+The build plan lists them as two screens, and they are two experiences: one seller waiting on an answer, another being asked to give it. But they are **one resource**. EP-29 serves both from the same id and answers `is_mine` to say which the caller is.
+
+Two routes would have meant two URLs for one proposal, and a reviewer following a link a proposer sent them would land somewhere that 404s. So `/proposals/[id]` renders the comparison for both audiences and shows the vote panel only to a reviewer who may still vote. `is_mine` picks the wording; `can_vote` picks whether the buttons exist at all.
+
+**What the vote screen deliberately does not have.**
+
+- **No per field control.** The comparison is a table that renders and does not interact. A checkbox beside each row would turn an all or nothing decision into a partial one, which is what invariant 4 exists to stop.
+- **No third button.** Approve and reject, and nothing for abstaining. A reviewer with no view simply leaves, and the backend excludes non voters from the denominator rather than counting them as against. A button would turn that silence into a recorded position.
+- **No confidence score, for either audience.** Not rendered, not in the types, and `assertNoConfidence` reads the raw payload of all four endpoints as text and throws if one appears. zod ignores keys it was not told about, so without that check a backend regression would validate silently and sit in memory waiting for somebody to render it. `resolution_reason` is refused alongside the two obvious names, because values like `high_confidence_peers_against` leak the band under a different name.
+- **No resolve control on an escalated proposal.** EP-41 and EP-42 are M11. The screen says an administrator is deciding and that there is no deadline on that step.
+
+**Deviations from the plan.**
+- **`types/proposal.ts` was rewritten rather than extended.** The M0 file guessed at `proposing_store`, `vote_summary`, `comments`, `my_vote`, `escalation_reason`, and `current_values`, none of which any endpoint returns. It was imported nowhere, so it was a second and wrong definition of shapes the contract now defines properly.
+- **`ProposalStatus` and `proposalStatusSchema` are re-exported from the M6 confirmation modules, not redeclared.** Two copies of one union drift the moment a status is added to one of them.
+- **The detail resource does not name the proposing store, and the screen does not ask for it.** The backend omits it deliberately, and the screens are worded to match: a reviewer decides whether the catalogue is right, not who asked.
+- **The vote count is shown as cast out of eligible, never as for against.** A running tally would let a late reviewer vote with the crowd rather than on the product.
+- **An escalated proposal is never described as decided**, even though it carries `resolved_at`. The window closing is what set that timestamp; the proposal is still unresolved and the seller is still blocked. Both the row and the detail say "went to an administrator" and show the date, rather than "decided". This was caught during verification rather than by design, and it would have told a blocked seller their wait was over.
+- **X-05 keeps its inline detail and gains a link.** A seller seeing the notice on their dashboard should not have to navigate to learn what is under review and when it closes. The link is for the vote count and the outcome, which are the parts that change.
+- **`/proposals` and `/proposals/to-review` read the page number from the URL** rather than holding it in component state, so a paginated view is shareable and survives a reload. Both need a Suspense boundary above `useSearchParams`, otherwise the whole route opts out of static rendering.
+
+**Known gaps handed to the other side.**
+- **Nothing blocking on the backend.**
+- **An escalated proposal is a dead end for the seller, and the interface now says so plainly.** It reads as blocked, awaiting an administrator, with no deadline. That is honest but it is not an answer, and until EP-41 and EP-42 land at M11 there is no screen anywhere that can give one. This is the platform's longest standing unresolved state.
+- **A rejected proposal tells the seller they may try again, and nothing enforces or assists that.** They go back through `/sell/attach` and answer the questions afresh. There is no shortcut from the rejected proposal into a new confirmation, because no endpoint offers one.
+- **No reviewer sees another reviewer's comment.** Comments are collected and, per the backend, read by an administrator on escalation. Nothing in this milestone displays them, and nothing should: a reviewer reading the others' reasoning before voting is the anchoring problem the confidence score was hidden to avoid.
+- X-04 still links to `/analytics`, which is M10 and remains a dead link. `/proposals` is live as of this milestone.
+
+**Verified by.**
+- `npm run docs:check`, `npx tsc --noEmit`, `npm run lint`, and `npm run build` all clean
+- Against the live API through the authenticated proxy:
+  - A frozen reviewer's EP-28 returned **two proposals**, one with `votes_cast: 1` of 8, both with `has_voted: false`
+  - EP-29 on one of them returned the comparison `Battery: 4500 mAh -> 5200 mAh` with `can_vote: true`, `is_mine: false`, and **no confidence field**
+  - A reject vote returned **`{"vote_recorded":true,"proposal_status":"pending","resolved_at":null}`**, and a second vote from the same store returned **409 `already_voted`**
+  - The proposing store's EP-27 showed its own proposal, and EP-29 returned **`is_mine: true`, `can_vote: false`**, including the zero reviewer case the screen has its own wording for
+  - A store that attached to the product **after** the proposal opened got **404** from EP-29 and **403 `not_eligible_to_vote`** from EP-30
+  - Expiring a window and running `proposals:sweep` escalated a proposal with `no_votes_cast`. It then reported **`can_vote: false`**, was refused with **409 `review_closed`**, **dropped out of the review queue**, and appeared to its proposer as escalated
+  - No `confidence_score`, `confidence_band`, or `resolution_reason` in any authenticated M7 payload, and no occurrence of "confidence" in the rendered HTML of any of the three screens
+- `/proposals`, `/proposals/to-review`, and `/proposals/{id}` all render 200 for a signed in seller and 307 to `/login?next=…` anonymously
+
+---
+
+### M8 Listing management and alerts, backend, 2026-08-27
+
+**Shipped.**
+- EP-25 `PATCH /api/attachments/{id}`, EP-26 `DELETE /api/attachments/{id}`
+- EP-36 `GET /api/wishlist`, EP-37 `POST /api/wishlist`, EP-38 `DELETE /api/wishlist/{id}`
+- `ListingService` and `WishlistService`, `ListingController` and `WishlistController`
+- `NotifyPriceDrop` and `NotifyNearbyAvailability`, both queued, with the `PriceDropped` and `NearbyAvailability` mail notifications
+- `WishlistItem` model over the `wishlist_items` table, which had existed unused since M0
+- `config/alerts.php`, holding the nearby radius
+
+**Contract.**
+- Contract version at time of writing: **bumped from 4 to 5**
+- Changes made to api-contract.md: added **section 11.9**, the attachment update request and response, the detach response carrying `store_is_live`, the wishlist item, and the wishlist add request. No existing shape changed
+- Error codes now live from this milestone: **none**. `validation_failed`, `forbidden`, and `not_found` already covered everything these endpoints refuse
+
+**No migration was needed, and that is worth recording.**
+
+`wishlist_items` was created at M0 with `unique(user_id, variant_id)` and a `last_notified_price_minor` column, written before any endpoint existed. Both turned out to be exactly right: the unique index is what makes a repeated save safe to answer with the existing row, and `last_notified_price_minor` is the entire repeat suppression mechanism. M8 added a model over the table and nothing else.
+
+**The two alerts, and the rules that decide them.**
+
+**Price drop.** Dispatched from `ListingService::update` only when the new price is **strictly lower** than the previous one, which is read inside the same transaction and under a row lock so two concurrent updates cannot both decide they were the drop. Dispatched `afterCommit`, because an email is the one side effect in this platform that cannot be withdrawn and a rolled back price must not have announced a discount.
+
+The suppression rule lives in the job: a buyer already told about this price **or a lower one** hears nothing. Without it a seller moving a price up and down around a threshold sends an email on every downswing, and the buyer learns to ignore all of them. The notified price is stamped **after** sending, not before: sending twice because a job retried is a nuisance, but stamping a price the buyer was never told about would silence every future alert down to that figure, which is a fault they could never diagnose.
+
+Two further refusals in the job, both about not sending a useless email: an unavailable listing is not an offer, and a price that moved again before the job ran is not the price that was queued.
+
+**Nearby availability.** Hung off `Attachment::created` rather than off any controller, so **every** path that creates a listing is covered: confirmation, the wizard, and an approved proposal releasing a withheld listing. A future path is covered without anyone remembering to add it.
+
+Distance is decided in PostGIS with `ST_DWithin` against the buyer's own coordinates, matching how the seller list already works, so it can use the spatial index rather than measuring every wishlist row in PHP. The radius is `config/alerts.php`, defaulting to 25 km, because the right figure is a question about geography rather than about code.
+
+**A buyer who never shared a location receives this alert for nothing.** That is the documented cost of declining the location prompt, not a fault. It deliberately does not fall back to notifying everybody, which would turn a useful alert into a marketing email.
+
+**Deviations from the plan.**
+- **The live flag needed no new work.** `Attachment::booted` has hooked `created` and `deleted` to `recomputeLiveFlag()` since M4, so invariant 12 was already enforced structurally. What M8 added is the test coverage the build plan asked for, and one rule in `ListingService::detach`: the row is deleted **through the model**, never by a bulk query, because a bulk delete skips model events and would leave a store selling to buyers with nothing on its shelves.
+- **EP-26 answers `store_is_live` rather than 204.** A seller removing their last listing has just made their store invisible, and that is the one thing they need to be told at that moment. A bare 204 would make the interface fetch the store again to find out.
+- **A repeat wishlist save answers 200 with the existing item rather than 409.** A buyer pressing save twice expressed the same intent twice. Recorded in the contract so the client does not code an error path for it.
+- **`lowest_price_minor` is null when nobody carries the variant**, and unavailable listings are excluded from it. A null there is a normal state rather than missing data: saving a combination no seller stocks is exactly what the nearby alert exists for.
+- **`last_notified_price_minor` is not serialised on EP-36.** It is bookkeeping for the alert job, and showing a buyer the price they were last told about invites them to read it as a price history, which it is not.
+- **EP-25 and EP-26 sit behind the `writes` limiter, not `attach`.** Neither costs a provider call, and a seller repricing a shelf of stock should not burn an attach quota that exists to protect the AI budget.
+- **Ownership is checked in the service, not the controller**, and answers **404 rather than 403**. Confirming that attachment 901 exists but belongs to somebody else tells a competitor something about their inventory.
+
+**Known gaps handed to the other side.**
+- **Nothing blocking. S-21's editing controls, S-14, and X-06 are all unblocked.**
+- **The alerts are invisible in the interface, by design.** Invariant 10 holds: email only, no bell, no notification centre. There is no endpoint to read past alerts from and none should be added. A buyer who does not read the email does not find out.
+- **Locally the mail driver is `log`**, so both alerts land in `storage/logs/laravel.log` rather than an inbox. The queue worker must be running or nothing sends at all.
+- **Nothing recomputes `lowest_price_minor` for a cached catalogue response.** Catalogue caching is M12, so this is only a note for when it lands: a price change invalidates a product's cached seller list.
+- **A detached seller keeps nothing.** There is no undo, no soft delete on attachments, and re-listing means going back through confirmation. That is intended, and worth the interface warning about before the last listing goes.
+- **Escalated proposals are still a dead end until M11**, unchanged by this milestone.
+
+**Verified by.**
+- 36 tests in `tests/Feature/Api/ListingManagementTest.php`
+- The build plan's stated M8 list, item by item: a price decrease queuing alerts and an increase not doing so, a price set to what it already was queuing nothing, repeat alerts suppressed by the last notified price and still firing when the price falls below it, the live flag recomputed on both creation and deletion, zero, negative, and decimal prices rejected, an empty update rejected rather than reported as success, and the product still answering at its own URL with `seller_count: 0` after its last seller leaves
+- Invariant 1 asserted directly: a PATCH carrying `name`, `category`, and `attribute_values` alongside a price changes the price and leaves the product untouched
+- Ownership refusals on both endpoints, wishlist isolation between buyers, and one wishlist per user rather than per role
+- The nearby alert asserted at three distances: a buyer 2 km away is told, one 300 km away is not, and one with no coordinates is not
+- `composer test` green: Pint passed, PHPStan level 7 with **0 errors**, 345 tests with 339 passed and 5 todo
+
+---
+
 ## 4. Open requests
 
 Things one side needs from the other that are not yet built. Remove a row only when it has shipped and been recorded in section 3.
@@ -929,7 +1049,7 @@ Things one side needs from the other that are not yet built. Remove a row only w
 | Frontend | 2026-08-26 | No endpoint lists live stores, so S-07 cannot be prerendered at build time through `generateStaticParams`. It renders on demand and caches for 300 seconds instead | Open, low priority. Only affects build time prerendering, not correctness |
 | Backend | 2026-08-27 | The confidential endpoint specification writes EP-22's outcome with `attachments` and `proposal` objects, while section 11.4 of the contract writes it with `attachment_ids`, `proposal_id`, and `review_closes_at`. The contract is what the client mirrors, so the contract was implemented. Worth deciding whether 11.4 should carry `review_opens_at` and the attachment prices as well, once S-24 is built and it is clear what the screen actually needs | Open. Not blocking: the current shape is sufficient to render both outcomes |
 | Backend | 2026-08-27 | EP-19 is not paginated. A store's listings are bounded in practice, but a seller carrying hundreds of products would return one large payload | Open, low priority. Revisit if it becomes a real shape rather than a hypothetical one |
-| Frontend | 2026-08-27 | **S-26 and S-27 could not be built at M6.** The build plan lists them under this milestone, but S-26 needs EP-27 and S-27 needs EP-29, both of which are M7. Building either would have meant inventing a shape the backend has not defined. They should be built alongside M7's own screens once those endpoints land, and the "still being built" copy on the S-24 outcome panel and in X-05 replaced with real links then | Open. Not blocking: X-05 renders the proposal detail inline from EP-19, so a blocked seller sees status, dates, and the fields under review without them |
+| Frontend | 2026-08-27 | **S-26 and S-27 could not be built at M6.** The build plan lists them under this milestone, but S-26 needs EP-27 and S-27 needs EP-29, both of which are M7. Building either would have meant inventing a shape the backend has not defined. They should be built alongside M7's own screens once those endpoints land, and the "still being built" copy on the S-24 outcome panel and in X-05 replaced with real links then | **Closed 2026-08-27.** Both shipped at frontend M7 against EP-27 and EP-29. S-27 shares the `/proposals/[id]` route with S-29, because EP-29 serves the proposer and the reviewers from one id. The "still being built" copy on the S-24 outcome panel and in X-05 is replaced by real links |
 
 | Backend | 2026-08-27 | **Nothing resolves an escalated proposal.** The matrix escalates on a tie, on no votes at all, and on high confidence with peers against, and EP-41 and EP-42 that act on that are M11. A seller whose proposal escalates stays blocked with no route out | Open. Not blocking the frontend, which renders escalated as a blocked state already. Blocking for the seller it happens to |
 

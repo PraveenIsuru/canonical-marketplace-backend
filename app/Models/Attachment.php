@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Jobs\NotifyNearbyAvailability;
 use Database\Factories\AttachmentFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -53,7 +54,23 @@ class Attachment extends Model
      */
     protected static function booted(): void
     {
-        static::created(fn (self $attachment) => $attachment->store?->recomputeLiveFlag());
+        static::created(function (self $attachment): void {
+            $attachment->store?->recomputeLiveFlag();
+
+            /*
+             * M8. Every path that creates an attachment is a shop starting to stock
+             * something, so the nearby availability alert hangs off the model rather
+             * than off any one controller: confirmation, the wizard, and an approved
+             * proposal releasing a withheld listing all count, and a future path would
+             * be covered without anyone remembering to add it.
+             *
+             * `afterCommit` because these events fire inside the surrounding
+             * transaction, and a rolled back attachment must not have told anyone a
+             * shop stocks something it does not.
+             */
+            NotifyNearbyAvailability::dispatch($attachment->id)->afterCommit();
+        });
+
         static::deleted(fn (self $attachment) => $attachment->store?->recomputeLiveFlag());
     }
 

@@ -1,6 +1,6 @@
 # API Contract
 
-**Contract version:** 4
+**Contract version:** 5
 **Owner:** the backend repository
 **Status:** authoritative
 
@@ -491,6 +491,79 @@ EP-29 answers **404** rather than 403 to a store that is neither the proposer no
 
 ---
 
+### 11.9 Listing management and the wishlist
+
+**The attachment update request**, accepted by EP-25.
+
+```json
+{ "price_minor": 429900, "is_available": false }
+```
+
+Both fields are optional and at least one must be present, so a seller can change a price without restating availability. `price_minor` is an **integer in the smallest currency unit and must be greater than zero**: a free listing is not a listing, and a negative price is not a discount. There is no `currency` field, because a store's currency is fixed when it registers and is not a per listing decision.
+
+**Nothing else is accepted.** A seller may change what they charge and whether they have stock, and nothing about the product, the variant, or the attribute values. Those belong to the canonical record and reach it only through a proposal.
+
+EP-25 answers the updated attachment:
+
+```json
+{
+  "data": {
+    "attachment_id": 901,
+    "variant_id": 55,
+    "product": { "id": 7, "slug": "vertex-one-smartphone", "name": "Vertex One Smartphone" },
+    "attribute_values": { "Colour": "Black" },
+    "price_minor": 429900,
+    "currency": "LKR",
+    "is_available": false
+  }
+}
+```
+
+**EP-26 detach** answers what the seller most needs to know afterwards:
+
+```json
+{ "data": { "detached": true, "store_is_live": false } }
+```
+
+`store_is_live` is recomputed from the remaining attachments before the response is built. It goes false when the seller has just removed their last listing, which is the moment their store stops being visible to buyers, and saying so here is what lets the interface warn rather than let them discover it later.
+
+**Detaching does not remove the product.** The canonical record is platform owned and outlives every seller on it. A product whose last seller leaves stays at its own URL, keeps its variants and its version history, and simply reports no sellers. It is not deleted, hidden, or archived.
+
+**The wishlist item**, returned by EP-36, which paginates per section 2.
+
+```json
+{
+  "id": 14,
+  "variant_id": 55,
+  "attribute_values": { "Colour": "Black" },
+  "product": { "id": 7, "slug": "vertex-one-smartphone", "name": "Vertex One Smartphone", "primary_image_url": null },
+  "lowest_price_minor": 429900,
+  "currency": "LKR",
+  "seller_count": 3
+}
+```
+
+Saved at **variant level, not product level**, because a price alert is only meaningful for a specific combination. `lowest_price_minor` is the cheapest available listing for that variant right now and is **null when nobody carries it**, which is a normal state rather than an error: a buyer may save a combination no seller stocks yet, and being told when one appears is the point.
+
+**The wishlist add request**, accepted by EP-37:
+
+```json
+{ "variant_id": 55 }
+```
+
+Adding a variant already on the wishlist is **not an error**. The endpoint answers the existing item with 200 rather than creating a duplicate, because a buyer pressing save twice has expressed the same intent twice.
+
+EP-38 deletes by the wishlist item's own id, not by variant id, and answers `{ "data": { "removed": true } }`.
+
+**Alerts are email only**, like every other notification in this platform. Two exist:
+
+- A **price drop**, when a seller lowers the price of a wishlisted variant. Only a decrease qualifies; raising a price notifies nobody. Repeat alerts are suppressed by the last price a buyer was notified at, so a seller moving a price up and down around a threshold does not generate an alert each time it falls.
+- **Nearby availability**, when a store within a buyer's own radius lists a variant on their wishlist. It needs the buyer's coordinates, so a buyer who never shared a location receives this alert for nothing, which is the documented cost of declining location rather than a fault.
+
+Neither alert has an endpoint. There is no notification surface in this platform to read them from.
+
+---
+
 ## 12. Change log
 
 | Version | Date | Change |
@@ -499,3 +572,4 @@ EP-29 answers **404** rather than 403 to a store that is neither the proposer no
 | 2 | 2026-08-27 | M5. Added `search_interpretation` to `result_type` in section 8, which seller catalogue search has emitted since M3 and the list omitted. Stated that `result_type` is null until a job completes, and that another user's job answers 404. Added section 11.7, the wizard submit outcome |
 | 3 | 2026-08-27 | M6. Added `confirmation_outcome` to `result_type` in section 8, which a queued confirmation submit completes as. Section 11.4 is unchanged and is what EP-22 returns |
 | 4 | 2026-08-27 | M7. Added section 11.8, the proposal list item, the detail with its change comparison, and the vote request body. EP-27 and EP-28 paginate per section 2. No existing shape changed |
+| 5 | 2026-08-27 | M8. Added section 11.9, the attachment update request and response, the detach response carrying `store_is_live`, the wishlist item, and the wishlist add request. EP-36 paginates per section 2. Recorded that a repeated wishlist add answers the existing item rather than failing. No existing shape changed |

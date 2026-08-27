@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\ConfirmationController;
 use App\Http\Controllers\Api\EmailVerificationController;
+use App\Http\Controllers\Api\ListingController;
 use App\Http\Controllers\Api\PasswordResetController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductImageController;
@@ -16,6 +17,7 @@ use App\Http\Controllers\Api\SearchController;
 use App\Http\Controllers\Api\SellerStoreController;
 use App\Http\Controllers\Api\StoreController;
 use App\Http\Controllers\Api\UserController;
+use App\Http\Controllers\Api\WishlistController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -136,7 +138,21 @@ Route::middleware('auth:sanctum')->group(function (): void {
      */
     Route::get('/jobs/{job}', [AiJobController::class, 'show']);
 
-    // M8  EP-36, EP-37, EP-38
+    /*
+     * M8 The wishlist, EP-36 to EP-38.
+     *
+     * Auth rather than Seller: a user who runs a store keeps a wishlist like anyone
+     * else. One account holds both roles and there is no mode switch in this platform.
+     */
+    Route::get('/wishlist', [WishlistController::class, 'index']);
+
+    Route::post('/wishlist', [WishlistController::class, 'store'])
+        ->middleware('throttle:writes');
+
+    Route::delete('/wishlist/{item}', [WishlistController::class, 'destroy'])
+        ->whereNumber('item')
+        ->middleware('throttle:writes');
+
     // M9  EP-32, EP-33, EP-34, EP-35
 });
 
@@ -217,7 +233,24 @@ Route::middleware(['auth:sanctum', 'store'])->group(function (): void {
         ->whereNumber('proposal')
         ->middleware('throttle:writes');
 
-    // M8  EP-25, EP-26
+    /*
+     * M8 Listing management, EP-25 and EP-26.
+     *
+     * The entirety of a seller's write access to the catalogue: their own price and
+     * their own availability. Nothing here reaches a product, an attribute, or a
+     * variant, which is invariant 1 and the reason a proposal exists.
+     *
+     * Behind the write limiter rather than the attach limiter. These cost no provider
+     * call, and a seller repricing a shelf of stock should not burn an attach quota.
+     */
+    Route::patch('/attachments/{attachment}', [ListingController::class, 'update'])
+        ->whereNumber('attachment')
+        ->middleware('throttle:writes');
+
+    Route::delete('/attachments/{attachment}', [ListingController::class, 'destroy'])
+        ->whereNumber('attachment')
+        ->middleware('throttle:writes');
+
     // M10 EP-39, EP-46, EP-47
 });
 
