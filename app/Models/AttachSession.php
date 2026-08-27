@@ -43,7 +43,7 @@ class AttachSession extends Model
      */
     public const LIFETIME_HOURS = 24;
 
-    protected $fillable = ['store_id', 'type', 'product_id', 'questions', 'draft', 'expires_at'];
+    protected $fillable = ['store_id', 'type', 'product_id', 'questions', 'draft', 'ai_job_id', 'expires_at'];
 
     /** @return array<string, string> */
     protected function casts(): array

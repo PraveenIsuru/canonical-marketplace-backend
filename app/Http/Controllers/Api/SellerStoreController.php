@@ -9,8 +9,10 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\PlacePinRequest;
 use App\Http\Requests\Api\StoreStoreRequest;
 use App\Http\Requests\Api\UpdateStoreRequest;
+use App\Http\Resources\OwnListingsResource;
 use App\Http\Resources\OwnStoreResource;
 use App\Models\Store;
+use App\Queries\StoreListingsQuery;
 use App\Services\Stores\StoreRegistrationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -46,6 +48,19 @@ final class SellerStoreController extends Controller
     public function show(Request $request): OwnStoreResource
     {
         return new OwnStoreResource($this->ownStore($request));
+    }
+
+    /**
+     * EP-19 What this store carries, and what it is blocked on.
+     *
+     * Two lists in one call, and the second is why this endpoint is not just a query
+     * over attachments. A product with a proposal under review has **no attachment row
+     * at all**, so a screen built from listings alone would show nothing and leave the
+     * seller wondering where their submission went.
+     */
+    public function listings(Request $request, StoreListingsQuery $listings): OwnListingsResource
+    {
+        return new OwnListingsResource($listings->forStore($this->ownStore($request)));
     }
 
     /**

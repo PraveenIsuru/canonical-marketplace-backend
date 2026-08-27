@@ -5,8 +5,10 @@ declare(strict_types=1);
 use App\Models\Attachment;
 use App\Models\AttachSession;
 use App\Models\Product;
+use App\Models\ProductAttribute;
 use App\Models\Store;
 use App\Models\User;
+use App\Models\Variant;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 
@@ -167,8 +169,47 @@ it('computes distance in the database rather than in php', function (): void {
 */
 
 it('never lets a seller write to a product, attribute, or variant', function (): void {
-    //
-})->todo('M6. The only seller path into product data is a proposal');
+    $product = Product::factory()->create(['name' => 'Aurora Field Recorder FR-2']);
+    ProductAttribute::create([
+        'product_id' => $product->id,
+        'name' => 'Colour',
+        'options' => ['Black'],
+        'position' => 0,
+    ]);
+    $variant = Variant::factory()->for($product)->combination(['Colour' => 'Black'])->create();
+
+    $user = User::factory()->create();
+    Store::factory()->for($user)->create();
+
+    /*
+     * There is no seller route that writes to a canonical record. Asserting the absence
+     * of a capability means asserting no route offers it, so this walks the registered
+     * routes rather than guessing at paths that might exist.
+     */
+    $writable = collect(Route::getRoutes())
+        ->filter(fn ($route): bool => str_starts_with($route->uri(), 'api/'))
+        ->filter(fn ($route): bool => (bool) array_intersect($route->methods(), ['PUT', 'PATCH', 'DELETE']))
+        ->map(fn ($route): string => implode('|', $route->methods()).' '.$route->uri())
+        ->values();
+
+    // The only writes a seller has are to their own store and their own location.
+    // Nothing addresses a product, an attribute, or a variant.
+    foreach ($writable as $route) {
+        expect($route)->not->toContain('products')
+            ->and($route)->not->toContain('variants')
+            ->and($route)->not->toContain('attributes');
+    }
+
+    // And the record is unchanged by the one seller flow that touches it at all.
+    $before = [$product->name, $product->specifications];
+
+    $this->actingAs($user, 'sanctum')
+        ->postJson('/api/attach/confirm/start', ['product_id' => $product->id])
+        ->assertOk();
+
+    expect([$product->refresh()->name, $product->specifications])->toBe($before)
+        ->and($variant->refresh()->attribute_values)->toBe(['Colour' => 'Black']);
+});
 
 it('never removes a generated variant combination', function (): void {
     $user = User::factory()->create();
@@ -221,8 +262,47 @@ it('never removes a generated variant combination', function (): void {
 });
 
 it('creates no attachment row while a proposal is pending', function (): void {
-    //
-})->todo('M6. The absence of the row is what blocks the proposing seller');
+    $product = Product::factory()->create([
+        'name' => 'Aurora Field Recorder FR-2',
+        'specifications' => ['inputs' => '2'],
+    ]);
+    Variant::factory()->for($product)->combination(['Colour' => 'Black'])->create();
+
+    $user = User::factory()->create();
+    $store = Store::factory()->for($user)->create();
+
+    $session = $this->actingAs($user, 'sanctum')
+        ->postJson('/api/attach/confirm/start', ['product_id' => $product->id])
+        ->assertOk()->json('data.session_id');
+
+    $answers = [];
+    foreach (AttachSession::findOrFail($session)->questions as $question) {
+        $answers[$question['id']] = $question['attribute'] === 'inputs'
+            ? '4'                                        // Disagrees, so a proposal opens.
+            : (string) ($question['current_value'] ?? 'unchanged');
+    }
+
+    $this->actingAs($user, 'sanctum')
+        ->postJson('/api/attach/confirm/submit', [
+            'session_id' => $session,
+            'answers' => $answers,
+            'variant_ids' => [$product->variants()->first()->id],
+            'price_minor' => 450_000,
+        ])
+        ->assertCreated()
+        ->assertJsonPath('data.outcome', 'proposal_created');
+
+    /*
+     * The absence of the row *is* the block. Not a flag beside an attachment, not a
+     * disabled state on one: there is nothing to disable, which is why no query
+     * anywhere can forget to check it.
+     */
+    expect(Attachment::where('store_id', $store->id)->count())->toBe(0)
+        ->and($store->refresh()->is_live)->toBeFalse();
+
+    // And the product remains as it was. The change is proposed, not applied.
+    expect($product->refresh()->specifications['inputs'])->toBe('2');
+});
 
 it('creates a version only on an accepted proposal or an administrator edit', function (): void {
     //

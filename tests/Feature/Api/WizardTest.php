@@ -625,7 +625,10 @@ it('gives a second product with the same name a different slug', function (): vo
         ->postJson('/api/attach/wizard/submit', wizardPayload(wizardSession($other->store)))
         ->assertCreated();
 
-    expect(Product::pluck('slug')->all())
+    // Ordered explicitly. A bare pluck returns rows in whatever order PostgreSQL finds
+    // them, which is stable only until something else changes the table's churn, and
+    // the assertion here is about the slugs rather than about their physical order.
+    expect(Product::orderBy('id')->pluck('slug')->all())
         ->toBe(['aurora-field-recorder-fr-2', 'aurora-field-recorder-fr-2-2']);
 });
 

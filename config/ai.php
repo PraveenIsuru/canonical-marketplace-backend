@@ -34,6 +34,25 @@ return [
 
     'fake_should_fail' => (bool) env('AI_FAKE_SHOULD_FAIL', false),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Confidence band threshold
+    |--------------------------------------------------------------------------
+    |
+    | A proposal's confidence score at or above this counts as "high", and below it
+    | as "low". The band is what the resolution matrix reads: high confidence with
+    | peers against escalates to an administrator, low confidence with peers against
+    | is rejected outright.
+    |
+    | The raw score is stored alongside the band precisely so this number can be
+    | retuned later without the past meaning something different than it did.
+    |
+    | Neither the score nor the band ever appears in a response body.
+    |
+    */
+
+    'confidence_high_threshold' => (float) env('AI_CONFIDENCE_HIGH_THRESHOLD', 0.7),
+
     'anthropic' => [
         'key' => env('ANTHROPIC_API_KEY'),
         'model' => env('ANTHROPIC_MODEL', 'claude-sonnet-4-5'),

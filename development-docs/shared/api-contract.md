@@ -1,6 +1,6 @@
 # API Contract
 
-**Contract version:** 2
+**Contract version:** 3
 **Owner:** the backend repository
 **Status:** authoritative
 
@@ -167,13 +167,15 @@ Job status payload:
   "data": {
     "id": "9f2c1a80-...",
     "status": "queued | processing | completed | failed",
-    "result_type": "match_candidates | wizard_questions | confirmation_questions | verification_result | search_interpretation | null",
+    "result_type": "match_candidates | wizard_questions | confirmation_questions | confirmation_outcome | verification_result | search_interpretation | null",
     "result": null
   }
 }
 ```
 
 `result_type` is **null until the job completes**, including on a job that failed. It names the flow the client is resuming, and there is nothing to resume until there is a result.
+
+`confirmation_outcome` is what a queued confirmation submit completes as. Its result is the section 11.4 outcome, exactly as `POST /api/attach/confirm/submit` would have returned it. **It is not a confidence score**: the provider was asked for one, but what the client resumes from is the attach or proposal outcome, and the score itself reaches no response body.
 
 A job is readable only by the user who created it. A job belonging to somebody else answers **404, not 403**, because distinguishing the two would confirm that an id is real.
 
@@ -433,3 +435,4 @@ The vote response carries the post vote proposal status, so the screen shows the
 |---|---|---|
 | 1 | 2026-08-25 | Initial contract, written before M0. Sections 1 to 11 established |
 | 2 | 2026-08-27 | M5. Added `search_interpretation` to `result_type` in section 8, which seller catalogue search has emitted since M3 and the list omitted. Stated that `result_type` is null until a job completes, and that another user's job answers 404. Added section 11.7, the wizard submit outcome |
+| 3 | 2026-08-27 | M6. Added `confirmation_outcome` to `result_type` in section 8, which a queued confirmation submit completes as. Section 11.4 is unchanged and is what EP-22 returns |

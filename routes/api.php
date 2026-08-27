@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\AiJobController;
 use App\Http\Controllers\Api\AttachController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CategoryController;
+use App\Http\Controllers\Api\ConfirmationController;
 use App\Http\Controllers\Api\EmailVerificationController;
 use App\Http\Controllers\Api\PasswordResetController;
 use App\Http\Controllers\Api\ProductController;
@@ -179,7 +180,23 @@ Route::middleware(['auth:sanctum', 'store'])->group(function (): void {
     Route::post('/products/{product}/images', [ProductImageController::class, 'store'])
         ->middleware('throttle:writes');
 
-    // M6  EP-19, EP-21, EP-22
+    /*
+     * M6 EP-19. What this store carries, and what it is blocked on.
+     *
+     * Registered before the `/stores/{store}` public route can matter, and reachable
+     * because that one is constrained to a numeric id.
+     */
+    Route::get('/stores/mine/listings', [SellerStoreController::class, 'listings']);
+
+    /*
+     * M6 The confirmation flow. Behind the same `attach` limiter as matching and the
+     * wizard: each costs a provider call, and submit writes a proposal that blocks a
+     * seller for three days.
+     */
+    Route::middleware('throttle:attach')->group(function (): void {
+        Route::post('/attach/confirm/start', [ConfirmationController::class, 'start']);
+        Route::post('/attach/confirm/submit', [ConfirmationController::class, 'submit']);
+    });
     // M7  EP-27, EP-28, EP-29, EP-30
     // M8  EP-25, EP-26
     // M10 EP-39, EP-46, EP-47

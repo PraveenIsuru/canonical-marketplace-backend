@@ -52,6 +52,17 @@ class AiJob extends Model
 
     public const TYPE_WIZARD_QUESTIONS = 'wizard_questions';
 
+    public const TYPE_CONFIRMATION_QUESTIONS = 'confirmation_questions';
+
+    /**
+     * The outcome of a confirmation submission that had to be finished on the queue.
+     *
+     * Not the confidence score. The score is what the provider was asked for, but what
+     * the client resumes from is the attach or proposal outcome, and the score itself
+     * reaches no response body.
+     */
+    public const TYPE_CONFIRMATION_OUTCOME = 'confirmation_outcome';
+
     /** @return BelongsTo<User, $this> */
     public function user(): BelongsTo
     {

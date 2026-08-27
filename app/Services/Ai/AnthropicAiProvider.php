@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Ai;
 
 use App\Contracts\AiProvider;
+use App\Models\Product;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Throwable;
@@ -193,6 +194,151 @@ final class AnthropicAiProvider implements AiProvider
         }
 
         return $generated;
+    }
+
+    /**
+     * Asks for one question per field the record holds.
+     *
+     * The fields are enumerated in the prompt rather than left to the model to recall,
+     * because coverage is the requirement: every attribute is confirmed every time,
+     * without exception. Anything the reply misses is filled in afterwards with a plain
+     * question, so a terse model cannot quietly narrow the flow.
+     */
+    public function generateConfirmationQuestions(Product $product): array
+    {
+        $fields = $this->fieldsOf($product);
+
+        $listed = implode("\n", array_map(
+            static fn (array $field): string => "- {$field['attribute']}: {$field['current']}",
+            $fields,
+        ));
+
+        $prompt = <<<PROMPT
+            A seller says they stock this product and we are checking they mean the same
+            product the catalogue describes. Write one question for each field below.
+
+            Ask what the seller's own unit is, in a way that would reveal a genuine
+            difference. Do **not** put the current value in the question: quoting it
+            invites the seller to agree rather than to look at what they have.
+
+            Reply with JSON only, in the form
+            {"questions": [{"attribute": "name", "text": "..."}]}.
+            Use each attribute name below exactly as written.
+
+            Product: {$product->name}
+
+            Fields:
+            {$listed}
+            PROMPT;
+
+        $decoded = $this->ask([['type' => 'text', 'text' => $prompt]], maxTokens: 1500);
+
+        $written = [];
+
+        foreach ((array) ($decoded['questions'] ?? []) as $question) {
+            if (is_array($question) && is_string($question['attribute'] ?? null) && is_string($question['text'] ?? null)) {
+                $written[$question['attribute']] = $question['text'];
+            }
+        }
+
+        $questions = [];
+
+        foreach ($fields as $index => $field) {
+            $questions[] = new ConfirmationQuestion(
+                // Numbered here rather than trusting the reply, because duplicate ids
+                // would collapse two questions into one answer slot.
+                id: 'q'.($index + 1),
+                attribute: $field['attribute'],
+                /*
+                 * The fallback is what guarantees coverage. A model that returned four
+                 * questions for six fields would otherwise leave two attributes
+                 * unconfirmed, and an attribute nobody is asked about can never be
+                 * corrected.
+                 */
+                text: $written[$field['attribute']]
+                    ?? sprintf('What is the %s of the unit you stock?', str_replace('_', ' ', $field['attribute'])),
+                currentValue: $field['current'],
+            );
+        }
+
+        return $questions;
+    }
+
+    public function scoreConfirmationAnswers(array $questions, array $answers): ConfidenceAssessment
+    {
+        $transcript = implode("\n\n", array_map(
+            static fn (ConfirmationQuestion $question): string => sprintf(
+                "Q (%s): %s\nA: %s",
+                $question->attribute,
+                $question->text,
+                $answers[$question->id] ?? '',
+            ),
+            $questions,
+        ));
+
+        $prompt = <<<PROMPT
+            A seller answered these questions about a product they say they stock. Judge
+            how much confidence the answers themselves warrant.
+
+            Score on substance and internal consistency: specific answers that agree
+            with one another score high, vague or contradictory ones score low.
+
+            **Do not score on whether the seller agrees with any existing record.** A
+            seller who describes something different may simply have better information,
+            and that disagreement is the reason this process exists.
+
+            Reply with JSON only, in the form {"score": 0.82, "reason": "..."}.
+            Score from 0 to 1.
+
+            {$transcript}
+            PROMPT;
+
+        $decoded = $this->ask([['type' => 'text', 'text' => $prompt]], maxTokens: 512);
+
+        if (! isset($decoded['score']) || ! is_numeric($decoded['score'])) {
+            throw AiUnavailable::because('the provider returned no usable confidence score');
+        }
+
+        return new ConfidenceAssessment(
+            score: max(0.0, min(1.0, (float) $decoded['score'])),
+            reason: is_string($decoded['reason'] ?? null) ? $decoded['reason'] : '',
+        );
+    }
+
+    /**
+     * Every field on the record that has to be confirmed.
+     *
+     * Core fields, then every specification key, then every variant attribute. The
+     * order is stable so question ids mean the same thing across a retry.
+     *
+     * @return array<int, array{attribute: string, current: string}>
+     */
+    private function fieldsOf(Product $product): array
+    {
+        $fields = [
+            ['attribute' => 'name', 'current' => $product->name],
+            ['attribute' => 'category', 'current' => $product->category],
+        ];
+
+        if ($product->description !== null && $product->description !== '') {
+            $fields[] = ['attribute' => 'description', 'current' => $product->description];
+        }
+
+        foreach ($product->specifications ?? [] as $key => $value) {
+            $fields[] = [
+                'attribute' => (string) $key,
+                'current' => is_scalar($value) ? (string) $value : '',
+            ];
+        }
+
+        foreach ($product->productAttributes as $attribute) {
+            $fields[] = [
+                'attribute' => $attribute->name,
+                'current' => implode(', ', $attribute->options),
+            ];
+        }
+
+        return $fields;
     }
 
     /**

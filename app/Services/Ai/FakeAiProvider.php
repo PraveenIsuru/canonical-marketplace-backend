@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Ai;
 
 use App\Contracts\AiProvider;
+use App\Models\Product;
 
 /**
  * The AI provider used in development and in every test.
@@ -127,6 +128,98 @@ final class FakeAiProvider implements AiProvider
         }
 
         return $questions;
+    }
+
+    /**
+     * One question per field on the record, covering all of them.
+     *
+     * The coverage is the part that matters and the part a test asserts. Core fields,
+     * every specification key, and every variant attribute each get a question, because
+     * an attribute that is never asked about can never be corrected, and the record
+     * would drift in exactly the places nobody thought to look.
+     *
+     * The wording is plain rather than clever. A real provider phrases these better;
+     * what this has to get right is that nothing is missed.
+     */
+    public function generateConfirmationQuestions(Product $product): array
+    {
+        if ($this->shouldFail) {
+            throw AiUnavailable::because('the fake provider is configured to fail');
+        }
+
+        $questions = [];
+        $next = 1;
+
+        $ask = function (string $attribute, string $text, ?string $current) use (&$questions, &$next): void {
+            $questions[] = new ConfirmationQuestion('q'.$next, $attribute, $text, $current);
+            $next++;
+        };
+
+        $ask('name', 'What is the exact product name printed on the box?', $product->name);
+        $ask('category', 'Which category does this product belong in?', $product->category);
+
+        if ($product->description !== null && $product->description !== '') {
+            $ask('description', 'In your own words, what is this product?', $product->description);
+        }
+
+        foreach ($product->specifications ?? [] as $key => $value) {
+            $ask(
+                (string) $key,
+                sprintf('What is the %s of this product?', str_replace('_', ' ', (string) $key)),
+                is_scalar($value) ? (string) $value : null,
+            );
+        }
+
+        foreach ($product->productAttributes as $attribute) {
+            $ask(
+                $attribute->name,
+                sprintf('Which %s options does the unit you stock come in?', $attribute->name),
+                implode(', ', $attribute->options),
+            );
+        }
+
+        return $questions;
+    }
+
+    /**
+     * Scores on how much the seller actually wrote, not on whether they agreed.
+     *
+     * Deliberately not a similarity check against the record. A seller who disagrees is
+     * doing the thing the confirmation flow exists to capture, and scoring that down
+     * would make the platform trust whoever repeats back what it already believes.
+     *
+     * So the fake rewards substance: answered at all, and answered with more than a
+     * single word. That is enough to put a test either side of the band threshold on
+     * purpose, which is what the resolution matrix needs at M7.
+     */
+    public function scoreConfirmationAnswers(array $questions, array $answers): ConfidenceAssessment
+    {
+        if ($this->shouldFail) {
+            throw AiUnavailable::because('the fake provider is configured to fail');
+        }
+
+        if ($questions === []) {
+            return new ConfidenceAssessment(0.0, 'no questions were asked');
+        }
+
+        $substantial = 0;
+
+        foreach ($questions as $question) {
+            $answer = trim($answers[$question->id] ?? '');
+
+            if ($answer === '') {
+                continue;
+            }
+
+            // A one word answer is an answer. Two or more suggests the seller looked at
+            // the product rather than typing the first thing that would pass.
+            $substantial += count($this->words($answer)) > 1 ? 1 : 0.5;
+        }
+
+        return new ConfidenceAssessment(
+            score: round($substantial / count($questions), 3),
+            reason: sprintf('%s of %d answers carried detail', $substantial, count($questions)),
+        );
     }
 
     /**
