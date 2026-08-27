@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\EmailVerificationController;
 use App\Http\Controllers\Api\PasswordResetController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\SearchController;
+use App\Http\Controllers\Api\SellerStoreController;
 use App\Http\Controllers\Api\StoreController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Support\Facades\Route;
@@ -58,7 +59,12 @@ Route::middleware(['public', 'throttle:catalogue'])->group(function (): void {
     Route::get('/products/{product}/variants', [ProductController::class, 'variants']);
     Route::get('/products/{product}/sellers', [ProductController::class, 'sellers']);
     Route::get('/products/{product}/summary', [ProductController::class, 'summary']);
-    Route::get('/stores/{store}', [StoreController::class, 'show']);
+    /*
+     * Constrained to a numeric id so it cannot swallow /stores/mine, which is
+     * registered later in this file and would otherwise never be reached: route model
+     * binding would try to resolve a store with the id "mine".
+     */
+    Route::get('/stores/{store}', [StoreController::class, 'show'])->whereNumber('store');
 
     // M9  EP-31, EP-57
     // M10 EP-52
@@ -114,6 +120,11 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::post('/email/verification-notification', [EmailVerificationController::class, 'resend'])
         ->middleware('throttle:api-password');
 
+    // M4. EP-16 is Auth rather than Seller on purpose: the caller has no store yet, so
+    // the seller check would refuse the request that creates one.
+    Route::post('/stores', [SellerStoreController::class, 'store'])
+        ->middleware('throttle:writes');
+
     // M5  EP-50
     // M8  EP-36, EP-37, EP-38
     // M9  EP-32, EP-33, EP-34, EP-35
@@ -130,6 +141,15 @@ Route::middleware(['auth:sanctum', 'store'])->group(function (): void {
     // because a degraded result here could admit a duplicate canonical record.
     Route::get('/seller/catalogue-search', [SearchController::class, 'sellerCatalogue'])
         ->middleware('throttle:search');
+
+    // M4
+    Route::get('/stores/mine', [SellerStoreController::class, 'show']);
+
+    Route::patch('/stores/mine', [SellerStoreController::class, 'update'])
+        ->middleware('throttle:writes');
+
+    Route::post('/stores/mine/pin', [SellerStoreController::class, 'placePin'])
+        ->middleware('throttle:writes');
 
     // M4  EP-17, EP-18, EP-54
     // M5  EP-20, EP-23, EP-24, EP-48

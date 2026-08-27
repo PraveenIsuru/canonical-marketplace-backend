@@ -23,9 +23,11 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  * @property string|null $contact_phone
  * @property string $address_line
  * @property string $city
- * @property float $latitude
- * @property float $longitude
- * @property string $geocode_source
+ *                        Null until geocoding succeeds or a pin is placed, which is why a store can be
+ *                        registered before its location is known.
+ * @property float|null $latitude
+ * @property float|null $longitude
+ * @property string|null $geocode_source
  * @property float|null $rating
  * @property bool $is_live
  */

@@ -24,8 +24,8 @@ Update the two status columns as milestones complete. Everything else in this fi
 | M0 Foundations | Done, with deferrals | Done |
 | M1 Accounts | Done | Done |
 | M2 Catalogue read | Done | Done |
-| M3 Search | Done | Not started |
-| M4 Seller onboarding | Not started | Not started |
+| M3 Search | Done | Done |
+| M4 Seller onboarding | Done | Not started |
 | M5 Wizard | Not started | Not started |
 | M6 Confirmation and proposals | Not started | Not started |
 | M7 Peer review | Not started | Not started |
@@ -415,6 +415,103 @@ A `loading.tsx` beside a route applies to **every nested route as well**, and it
 - The decisive test asserts the divergence directly: one provider failure, buyer 200 with `mode: "keyword"`, seller 503 with `ai_unavailable`
 - `composer test` green: Pint passed, PHPStan level 7 with **0 errors**, 149 passed and 9 todo
 - Live against the running server and the real index: `vertex` returns the smartphone in `ai` mode; "I am looking for a good smartphone" and "I would like a cheap laptop please" both resolve to the right product; with `AI_FAKE_SHOULD_FAIL=true` the buyer endpoint stays 200 with `mode: "keyword"` while the seller endpoint returns 503 with a top level `queued_job_id` and no `data` or `mode` key
+
+---
+
+### M3 Search, frontend, 2026-08-26
+
+**Shipped.**
+- S-03 `/search`, server rendered per request, under `(public)`
+- X-02 `KeywordFallbackNotice`, rendered only when the response says `mode` is `keyword`
+- `SearchForm`, a plain GET form now shared by S-03 and the home page
+- `searchResponseSchema` and the `searchProducts` helper for EP-14
+- `scripts/verify-m3-contract.mjs`, which parses live EP-14 responses and asserts a body missing `mode` is rejected
+
+**Contract.**
+- Contract version at time of writing: 1
+- Changes made to api-contract.md: none
+- Error codes handled on screen: none new. EP-14 answers 200 in both modes, so the only failure path is the ordinary error boundary
+
+**How the notice is driven.**
+
+By `mode` from the response body, and by nothing else. The client does not infer a fallback from an empty result set, a slow response, or anything it noticed itself, and it has no fallback logic of its own to grow. `mode` is required in the schema rather than optional with a default, so a body missing it fails loudly instead of quietly reading as `ai`.
+
+**The two empty states, which are not the same state.**
+
+A verbose query finds the product in `ai` mode and returns nothing in `keyword` mode, because the raw string goes to the engine untouched. So an empty result means different things depending on which path served it, and the screen says so:
+
+- Empty in `keyword` mode: the notice stays visible **and** the empty state explains that smart search would normally understand a phrase like this, suggesting a shorter term.
+- Empty in `ai` mode: a plain "nothing matched" with no suggestion that anything failed, because nothing did.
+
+Collapsing these into one message would leave a visitor unable to tell a degraded service from a weak query, which is the whole reason the fallback is visible rather than silent.
+
+**Deviations from the plan.**
+- **No EP-15 client helper was added.** The plan ties M3 to S-03 and X-02 only, and seller catalogue search has no screen until the attachment flow at M5. A helper with no caller would be dead code, and its failure path needs the queued job panel, which is M5 work.
+- **An empty `q` makes no request at all.** The API requires `q` and answers 422, so calling it would turn "you have not searched yet" into an error the visitor did nothing to cause. The screen shows a prompt instead.
+- The loading state is a `<Suspense>` boundary inside the page, keyed on the query, rather than a `loading.tsx`. A segment level file would apply to sibling routes and start streaming before the page component runs, which is what produced soft 404s during M2.
+
+**Known gaps handed to the other side.**
+- Nothing blocking.
+- `/search` is deliberately `noindex, follow`, so it will not appear in search engines. That is per the indexing rules; product pages carry the indexable content.
+- Category filtering is read from the URL and passed through to EP-14, but no category control is rendered on S-03. The catalogue screen owns that interaction, and adding a second one here was not asked for.
+
+**Verified by.**
+- `npm run build`, `npm run lint`, and `npx tsc --noEmit` all clean. `/search` builds as a dynamic route, which is correct for an endlessly varying query
+- `scripts/verify-m3-contract.mjs`: live responses parse, and a body without `mode` is rejected
+- Against the production build and the live API, with the backend toggled both ways:
+  - AI mode, verbose query: product card shown, **no notice**
+  - AI mode, no match: plain empty state, **no notice** and no claim that anything failed
+  - Keyword mode, verbose query: **notice shown and empty state shown together**, with wording specific to the degraded path
+  - Keyword mode, short query `vertex`: notice shown **and** the product found
+  - Toggling the backend back to healthy made the notice disappear again
+  - `/search` returns 200 with no token and carries `robots: noindex, follow`
+  - An empty query renders the prompt with no error
+
+---
+
+### M4 Seller onboarding, backend, 2026-08-27
+
+**Shipped.**
+- EP-16 `POST /api/stores`, EP-17 `POST /api/stores/mine/pin`, EP-18 `PATCH /api/stores/mine`, EP-54 `GET /api/stores/mine`
+- `GeocodingProvider` interface, with `FakeGeocodingProvider` (including a failing mode) and `LocationIqProvider`
+- `config/geocoding.php` and the binding in the provider that already binds the AI adapter
+- `StoreRegistrationService`, `StoreWriteResult`, `OwnStoreResource`, and three form requests
+- `GET /api/user` now returns a **real** store object instead of a hard coded null
+
+**Contract.**
+- Contract version at time of writing: 1
+- Changes made to api-contract.md: none
+- Error codes now live from this milestone: `store_exists`
+
+**Response shapes the frontend should code against.**
+- `geocoding_failed` sits **inside `data`**, per section 11.3 of the contract. EP-16's own wording says "at the top level of a 201 response", which is ambiguous; the contract is what the client mirrors, so `data` wins. Noted rather than silently chosen
+- The field appears **only on a write**: EP-16, EP-17, and EP-18 responses carry it, EP-54 does not
+- `latitude`, `longitude`, and `geocode_source` are **null** until geocoding succeeds or a pin is placed. Null is the routing signal into pin placement and must not be defaulted
+- `geocode_source` is `locationiq` or `manual_pin`
+- `is_live` is **false throughout onboarding** and there is no endpoint in this milestone that can change it
+- `GET /api/user` returns `store` as `{ id, name, is_live }` or null. Deliberately minimal; EP-54 is what prefills the settings form
+
+**Deviations from the plan.**
+- **`latitude`, `longitude`, and `geocode_source` are now nullable.** The schema design made all three NOT NULL, but EP-16 and contract section 11.3 both require creating a store with null coordinates when geocoding fails. Two independent specifications describe that path, so the constraints are what gave. `location` is a generated column and becomes null on its own, which is correct: a store with no coordinates cannot appear in a proximity sorted list, and it is not live either.
+- **EP-16 sits behind `auth:sanctum`, not the seller middleware.** The caller has no store yet, so the seller check would refuse the very request that creates one.
+- **A failed re-geocode on EP-18 keeps the previous coordinates.** The endpoint spec says to keep them; worth restating because the alternative is quietly removing a working store from every proximity sorted list because an edit to an unrelated field failed.
+- EP-18 re-geocodes only when the address or city actually changed. Re-running it on a phone number edit would spend a provider call answering a question nobody asked, and could replace good coordinates with a worse match.
+
+**A route collision found and fixed.**
+
+`GET /api/stores/{store}` was registered before `GET /api/stores/mine`, so route model binding tried to resolve a store with the id `mine` and the seller endpoint was unreachable. The public route is now constrained with `whereNumber('store')`, which fixes it regardless of registration order rather than relying on the file staying in a particular sequence.
+
+**Known gaps handed to the other side.**
+- **A store created through the geocoding failure path has null coordinates**, and S-18 must collect a pin before the seller can do anything useful. The 201 is not an error and must not be styled as one.
+- `is_live` stays false for every store this milestone can produce. Seller navigation will now appear because `store` is populated, but the dashboard should state plainly that the store is not yet visible and that at least one approved listing is required.
+- The real LocationIQ adapter is implemented but unexercised: `GEOCODING_PROVIDER=fake` is the default and no test touches the network. The fake resolves six Sri Lankan cities and treats anything else as a failure, which is a convenient way to demonstrate the pin flow without changing config.
+- EP-19 `GET /api/stores/mine/listings` is **not** part of this milestone. It lands at M6, so the dashboard cannot list listings yet.
+
+**Verified by.**
+- 31 tests in `tests/Feature/Api/SellerOnboardingTest.php`, covering the second store refused with `store_exists`, geocoding failure returning 201 rather than a 4xx, the pin path recording the manual source, the live flag staying false across create, pin, and update, validation, `store_required` on every seller route, and a payload being unable to set coordinates or visibility
+- One test walks invariant 12 end to end: a newly registered store is absent from the buyer seller list, and appears the moment it holds an attachment
+- `composer test` green: Pint passed, PHPStan level 7 with **0 errors**, 180 passed and 9 todo
+- Live against the running server: a new account showed `store: null`, seller routes returned `store_required`, store creation returned 201 with coordinates and `is_live: false`, `GET /api/user` then returned the minimal store object, a second create returned 409 `store_exists`; with the geocoder forced to fail, creation still returned **201** with null coordinates and the submitted details intact, and the pin endpoint then set the coordinates with `geocode_source: manual_pin` while `is_live` stayed false
 
 ---
 

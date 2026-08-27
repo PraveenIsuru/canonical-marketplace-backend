@@ -37,11 +37,19 @@ final class UserResource extends JsonResource
             'longitude' => $this->longitude,
 
             /*
-             * Null until a store exists. The stores table lands at M4, so this is
-             * hard coded null rather than guessed at, and the contract already
-             * describes it as nullable.
+             * Null until the user registers a store. Its presence is the whole
+             * definition of the seller role: there is no role column and no roles
+             * array, and the client derives seller navigation from this field alone.
+             *
+             * Deliberately minimal. The settings form uses EP-54, which returns the
+             * full record; fattening this payload would slow the call every
+             * authenticated page makes.
              */
-            'store' => null,
+            'store' => $this->resource->store === null ? null : [
+                'id' => $this->resource->store->id,
+                'name' => $this->resource->store->name,
+                'is_live' => $this->resource->store->is_live,
+            ],
         ];
     }
 }
