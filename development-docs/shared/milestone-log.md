@@ -27,7 +27,7 @@ Update the two status columns as milestones complete. Everything else in this fi
 | M3 Search | Done | Done |
 | M4 Seller onboarding | Done | Done |
 | M5 Wizard | Done | Done |
-| M6 Confirmation and proposals | Done | Not started |
+| M6 Confirmation and proposals | Done | Done |
 | M7 Peer review | Not started | Not started |
 | M8 Listings and wishlist | Not started | Not started |
 | M9 Community and verification | Not started | Not started |
@@ -795,6 +795,70 @@ EP-19 returns two lists in one call:
 
 ---
 
+### M6 The confirmation and proposal path, frontend, 2026-08-27
+
+**Shipped.**
+- S-23 match selection, wired into confirmation from the existing `/sell/attach` screen
+- S-24 `/sell/confirm`, the mandatory confirmation flow and both of its outcomes
+- S-21 `/listings`, built from both halves of EP-19
+- X-05 `components/proposal/PendingProposalNotice.tsx`, on the dashboard, the listings screen, and the match screen
+- `lib/api/confirmation.ts`, `lib/schemas/confirmation.ts`, `types/confirmation.ts`, `lib/api/parse.ts`
+- The M5 dashboard copy saying listings were still being built is replaced by real EP-19 data
+
+**Contract.**
+- Contract version at time of writing: 3
+- Changes made to api-contract.md: none. This side mirrors it
+- Error codes handled on screen: `confirmation_incomplete` (422), `proposal_pending` (409), `already_attached` (409), `validation_failed` (422, including the expired session case keyed on `session_id`), `ai_unavailable` (503)
+- `confirmation_outcome` added to the job `result_type` union in `lib/schemas/common.ts` and `types/api.ts`, per contract version 3
+
+**S-26 and S-27 were not built, and this is the important entry.**
+
+The frontend build plan lists both under M6. Neither can be built, because their data does not exist: S-26 needs `GET /api/proposals/mine` (EP-27) and S-27 needs `GET /api/proposals/{id}` (EP-29), and both are **M7**.
+
+Building either would have meant inventing a response shape the backend has not defined, which section 8 of the integration protocol forbids outright, and section 6 answers directly: a screen whose endpoint does not answer does not get built yet. They are raised as an open request instead.
+
+The knock on effect is worth stating, because it changes a specified behaviour. The screen inventory says X-05 carries a link to S-27. That link would go nowhere, so **X-05 renders the proposal detail inline instead**: status, both dates, and which fields are under review, all of which EP-19's `blocked` entry already carries. A seller sees everything the notice was specified to tell them, without a dead link.
+
+**How the two outcomes are presented, which is the point of this milestone.**
+
+EP-22 answers **201 for both**, so the status code says nothing and `outcome` says everything. That is enforced rather than trusted: `ConfirmationOutcome` is a **discriminated union** in both the type and the zod schema, and the two variants share no keys. A component that forgot to branch would fail to compile rather than read `attachment_ids` off a proposal payload, get `undefined`, and tell a blocked seller they were live.
+
+`proposal_created` is **not styled as a failure anywhere**. The heading reads "Your answers are with the other sellers", the panel explains that nobody edits a record directly and that this is how the catalogue stays accurate, and it says plainly that being unable to list yet is not a penalty. Blue, not red. A seller who answered honestly and hit a difference has done the thing the platform exists to capture.
+
+**Deviations from the plan.**
+- **S-21 is read only.** Price editing, the availability toggle, and detach are EP-25 and EP-26 at M8. The screen says so once at the bottom rather than rendering disabled controls on every row: a greyed out price field would imply this seller is not allowed to edit, when in fact nobody can yet.
+- **X-05 shows a countdown as well as the closing date**, from `timeRemaining`. "Closes 30 Aug" is less useful than "closes 30 Aug, about 3 days from now" to someone deciding whether to wait.
+- **The blocked section renders above the listings**, on both the dashboard and S-21. A seller who submitted something and cannot find it is the person most likely to be on that screen, so it answers their question first.
+- **`already_attached` and `proposal_pending` are handled on the match screen as well as the confirmation screen.** EP-21 is called when a candidate is chosen, so both refusals land before a navigation. `already_attached` redirects to the listings; `proposal_pending` fills X-05 from EP-19, which is what actually knows the dates and the fields under review.
+- **The chosen candidate is persisted to `localStorage`**, alongside the draft and the job ids from M5. A reload mid confirmation still knows which product is being confirmed, and the product name renders without a second fetch.
+- **The queued job for confirmation gets its own storage key.** A seller can plausibly have a match queued and a confirmation queued at once, and resuming the wrong one would drop them back into a flow they had already left.
+- **`getProductVariants` fetches EP-10 through the proxy from the browser**, unlike the other catalogue helpers which fetch server side for the static pages. The confirmation screen is a client component and needs the versions at interaction time. Safe rather than merely convenient: a public route is defined not to change behaviour when a token happens to be present, so the extra hop costs a request and changes nothing about the answer.
+- **A new shared `lib/api/parse.ts`.** The M4 and M5 modules keep their own local copies of the same helper; refactoring shipped code for a cosmetic gain was not part of this milestone.
+
+**Known gaps handed to the other side.**
+- **Nothing blocking on the backend.**
+- **Reviewers still cannot vote, and this is now the most visible gap in the platform.** A seller who receives the reviewer email has nowhere to go: S-28 and S-29 need EP-28 and EP-30, both M7. Nothing in this milestone's interface implies a vote screen exists, and no vote UI was invented.
+- **Nothing resolves a proposal.** Every proposal stays `pending` until M7 ships the resolution matrix and the window sweep, so a seller blocked today stays blocked. X-05 gives a closing date that nothing currently acts on when it passes.
+- S-26 and S-27 are outstanding, per the note above. The S-24 outcome panel and X-05 both say a page showing the review's progress is still being built, rather than linking anywhere.
+- X-04 still links to `/proposals` and `/analytics`, which do not exist. `/listings` is live as of this milestone. The other two are M7 and M10 and remain dead links.
+- The record is not changed by a pending proposal, and the interface says so. A seller looking at the public product page during their own review sees the old value, which is correct and worth not treating as a bug report.
+
+**Verified by.**
+- `npm run docs:check`, `npx tsc --noEmit`, `npm run lint`, and `npm run build` all clean
+- Against the live API through the authenticated proxy, with the queue worker running:
+  - Matching a seeded product returned one candidate, and EP-21 opened a session with **8 questions covering every field**, carrying **no `current_value` and no confidence field**
+  - A blank answer returned **422 `confirmation_incomplete`**
+  - Answers matching the record returned **201 `{"outcome":"attached","attachment_ids":[23]}`**; the product appeared in `listings` and the session reported `is_live: true`
+  - A second start for that seller returned **409 `already_attached`**
+  - From a second seller, one differing answer returned **201 `{"outcome":"proposal_created","proposal_id":2,"review_closes_at":"2026-08-30T12:15:59+00:00"}`**, three days out
+  - That seller's EP-19 showed **`listings=0, blocked=1`** with the status, the closing date, and `changed_fields: ["Battery"]`, and their store stayed dark
+  - A second start while pending returned **409 `proposal_pending`**
+  - No `confidence_score`, `confidence_band`, `current_value`, or `created_by_store_id` in any M6 payload or in the rendered HTML
+  - The public record still reads `Battery: 4500 mAh` while the proposal says `5200 mAh`, so a pending proposal changes nothing
+  - `/listings`, `/sell/confirm`, and `/sell/attach` all render 200 for a signed in seller and 307 to `/login?next=…` anonymously
+
+---
+
 ## 4. Open requests
 
 Things one side needs from the other that are not yet built. Remove a row only when it has shipped and been recorded in section 3.
@@ -806,5 +870,6 @@ Things one side needs from the other that are not yet built. Remove a row only w
 | Frontend | 2026-08-26 | No endpoint lists live stores, so S-07 cannot be prerendered at build time through `generateStaticParams`. It renders on demand and caches for 300 seconds instead | Open, low priority. Only affects build time prerendering, not correctness |
 | Backend | 2026-08-27 | The confidential endpoint specification writes EP-22's outcome with `attachments` and `proposal` objects, while section 11.4 of the contract writes it with `attachment_ids`, `proposal_id`, and `review_closes_at`. The contract is what the client mirrors, so the contract was implemented. Worth deciding whether 11.4 should carry `review_opens_at` and the attachment prices as well, once S-24 is built and it is clear what the screen actually needs | Open. Not blocking: the current shape is sufficient to render both outcomes |
 | Backend | 2026-08-27 | EP-19 is not paginated. A store's listings are bounded in practice, but a seller carrying hundreds of products would return one large payload | Open, low priority. Revisit if it becomes a real shape rather than a hypothetical one |
+| Frontend | 2026-08-27 | **S-26 and S-27 could not be built at M6.** The build plan lists them under this milestone, but S-26 needs EP-27 and S-27 needs EP-29, both of which are M7. Building either would have meant inventing a shape the backend has not defined. They should be built alongside M7's own screens once those endpoints land, and the "still being built" copy on the S-24 outcome panel and in X-05 replaced with real links then | Open. Not blocking: X-05 renders the proposal detail inline from EP-19, so a blocked seller sees status, dates, and the fields under review without them |
 
 Use this table rather than guessing. A frontend screen that needs a field the contract does not define adds a row here. It does not invent a field name and hope.

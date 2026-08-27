@@ -130,7 +130,20 @@ final class ConfirmationService
         ): ConfirmationOutcome {
             $outcome = $changes === []
                 ? $this->attach($store, $product, $variants, $priceMinor, $currency)
-                : $this->openProposal($store, $product, $changes, $answers, $questions, $assessment->score);
+                : $this->openProposal(
+                    $store,
+                    $product,
+                    $changes,
+                    $answers,
+                    $questions,
+                    $assessment->score,
+                    // Recorded rather than discarded. Approval has to release the
+                    // listing this proposal is withholding, and it cannot do that from
+                    // the changes alone.
+                    $variants->pluck('id')->all(),
+                    $priceMinor,
+                    $currency,
+                );
 
             // Consumed either way. A session that could be submitted twice would create
             // a second proposal or a duplicate attachment.
@@ -184,6 +197,7 @@ final class ConfirmationService
      * @param  array<string, array{from: string|null, to: string}>  $changes
      * @param  array<string, string>  $answers
      * @param  array<int, ConfirmationQuestion>  $questions
+     * @param  array<int, int>  $intendedVariantIds  the listing approval will release
      */
     private function openProposal(
         Store $store,
@@ -192,6 +206,9 @@ final class ConfirmationService
         array $answers,
         array $questions,
         float $score,
+        array $intendedVariantIds,
+        int $intendedPriceMinor,
+        string $intendedCurrency,
     ): ConfirmationOutcome {
         $opensAt = now();
 
@@ -203,6 +220,14 @@ final class ConfirmationService
             // administrator at M11 can see what was actually said rather than only the
             // diff it produced.
             'ai_answers' => $this->transcript($questions, $answers),
+            /*
+             * The listing being withheld. No attachment row exists while this is
+             * pending, and that absence is the block; these three columns are what let
+             * approval undo it without asking the seller to submit again.
+             */
+            'intended_variant_ids' => $intendedVariantIds,
+            'intended_price_minor' => $intendedPriceMinor,
+            'intended_currency' => $intendedCurrency,
             'confidence_score' => $score,
             'confidence_band' => Proposal::bandFor($score),
             'status' => Proposal::STATUS_PENDING,

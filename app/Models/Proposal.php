@@ -59,11 +59,19 @@ class Proposal extends Model
         'store_id',
         'changes',
         'ai_answers',
+        // What the seller is waiting to list. Withheld until this resolves, and
+        // released by approval, which is the only thing that reads them.
+        'intended_variant_ids',
+        'intended_price_minor',
+        'intended_currency',
         'confidence_score',
         'confidence_band',
         'status',
         'review_opens_at',
         'review_closes_at',
+        'resolved_at',
+        'resolution_reason',
+        'resolved_by_user_id',
     ];
 
     /**
@@ -81,6 +89,8 @@ class Proposal extends Model
         return [
             'changes' => 'array',
             'ai_answers' => 'array',
+            'intended_variant_ids' => 'array',
+            'intended_price_minor' => 'integer',
             'review_opens_at' => 'datetime',
             'review_closes_at' => 'datetime',
             'resolved_at' => 'datetime',
@@ -105,6 +115,36 @@ class Proposal extends Model
     public function reviewers(): HasMany
     {
         return $this->hasMany(ProposalReviewer::class);
+    }
+
+    /**
+     * The votes actually cast.
+     *
+     * Fewer than the reviewers, usually. The gap is the non voters, who are excluded
+     * from the denominator rather than counted as opposed.
+     *
+     * @return HasMany<ProposalVote, $this>
+     */
+    public function votes(): HasMany
+    {
+        return $this->hasMany(ProposalVote::class);
+    }
+
+    /**
+     * Whether this store was entitled to vote when the proposal opened.
+     *
+     * Read from the frozen set, never from current attachments. A store that attached
+     * during the window is not eligible, and a store that detached keeps its vote.
+     */
+    public function hasReviewer(int $storeId): bool
+    {
+        return $this->reviewers()->where('store_id', $storeId)->exists();
+    }
+
+    /** The three day window has run out. Votes are refused after this. */
+    public function reviewHasClosed(): bool
+    {
+        return $this->review_closes_at->isPast();
     }
 
     /**
