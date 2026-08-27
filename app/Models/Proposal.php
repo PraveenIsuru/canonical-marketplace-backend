@@ -33,6 +33,14 @@ use Illuminate\Support\Carbon;
  * @property string $status
  * @property Carbon $review_opens_at
  * @property Carbon $review_closes_at
+ * @property Carbon|null $resolved_at
+ * @property string|null $resolution_reason
+ * @property string $confidence_band
+ * @property array<int, int>|null $intended_variant_ids
+ * @property int|null $intended_price_minor
+ * @property string|null $intended_currency
+ * @property int|null $votes_count
+ * @property int|null $reviewers_count
  */
 class Proposal extends Model
 {

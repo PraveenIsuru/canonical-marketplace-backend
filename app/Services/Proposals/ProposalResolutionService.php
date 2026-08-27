@@ -4,15 +4,18 @@ declare(strict_types=1);
 
 namespace App\Services\Proposals;
 
+use App\Exceptions\ApiException;
 use App\Jobs\IndexProduct;
 use App\Models\Attachment;
 use App\Models\Product;
 use App\Models\ProductAttribute;
 use App\Models\Proposal;
 use App\Models\ProposalVote;
+use App\Models\Store;
 use App\Models\Variant;
 use App\Services\Catalogue\ProductVersionService;
 use App\Services\Catalogue\VariantGenerationService;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -274,10 +277,53 @@ final class ProposalResolutionService
     }
 
     /**
+     * The vote endpoint's single entry point (EP-30).
+     *
+     * Three refusals, checked here rather than in the controller so that the endpoint
+     * and any future caller cannot disagree about what a valid vote is:
+     *
+     *  - **not_eligible_to_vote.** The store is not in the frozen reviewer set. Read
+     *    from `proposal_reviewers`, never from current attachments, so a store that
+     *    attached mid window cannot vote and one that detached still can.
+     *  - **review_closed.** The three day window has run out. The sweep decides it from
+     *    here, and a late vote would change an outcome that has already been reached.
+     *  - **already_voted.** One vote per store, and a cast vote is never revised.
+     *
+     * The proposing store is not in its own reviewer set, so it falls out at the first
+     * check without needing a rule of its own.
+     */
+    public function castVote(Proposal $proposal, Store $store, bool $inFavour, ?string $comment): Proposal
+    {
+        if (! $proposal->hasReviewer($store->id)) {
+            throw ApiException::notEligibleToVote();
+        }
+
+        if ($proposal->status !== Proposal::STATUS_PENDING || $proposal->reviewHasClosed()) {
+            throw ApiException::reviewClosed();
+        }
+
+        if ($proposal->votes()->where('store_id', $store->id)->exists()) {
+            throw ApiException::alreadyVoted();
+        }
+
+        try {
+            return $this->recordVote($proposal, $store->id, $inFavour, $comment);
+        } catch (UniqueConstraintViolationException) {
+            /*
+             * Two requests from the same store arriving together both passed the check
+             * above before either inserted. The unique index on (proposal_id, store_id)
+             * is what actually enforces one vote per store; this turns its error into
+             * the same refusal the caller would have got a moment earlier.
+             */
+            throw ApiException::alreadyVoted();
+        }
+    }
+
+    /**
      * Records a vote, then resolves if that was the last one outstanding.
      *
-     * Eligibility, double voting, and the closed window are all checked by the caller
-     * before this runs, so reaching here means the vote is valid.
+     * The guards live in `castVote`, which is what the endpoint calls. Reaching here
+     * means the vote has already been established as valid.
      */
     public function recordVote(Proposal $proposal, int $storeId, bool $inFavour, ?string $comment): Proposal
     {

@@ -28,7 +28,7 @@ Update the two status columns as milestones complete. Everything else in this fi
 | M4 Seller onboarding | Done | Done |
 | M5 Wizard | Done | Done |
 | M6 Confirmation and proposals | Done | Done |
-| M7 Peer review | Not started | Not started |
+| M7 Peer review | Done | Not started |
 | M8 Listings and wishlist | Not started | Not started |
 | M9 Community and verification | Not started | Not started |
 | M10 Analytics and versions | Not started | Not started |
@@ -859,6 +859,65 @@ EP-22 answers **201 for both**, so the status code says nothing and `outcome` sa
 
 ---
 
+### M7 Peer review and resolution, backend, 2026-08-27
+
+**Shipped.**
+- EP-27 `GET /api/proposals/mine`, EP-28 `GET /api/proposals/to-review`, EP-29 `GET /api/proposals/{id}`, EP-30 `POST /api/proposals/{id}/vote`
+- `ResolutionMatrix`, `ResolutionOutcome`, and `ProposalResolutionService`, which is the only thing in the codebase that resolves a proposal
+- `SweepReviewWindows` (`proposals:sweep`), scheduled hourly with `withoutOverlapping`
+- `ProposalsQuery`, `ProposalSummaryResource`, `ProposalDetailResource`, `VoteOnProposalRequest`, `ProposalController`
+- The `ProposalVote` model and the `proposal_votes` table put to use for the first time
+
+**Contract.**
+- Contract version at time of writing: **bumped from 3 to 4**
+- Changes made to api-contract.md: added **section 11.8**, the proposal list item, the detail with its change comparison, and the vote request body. No existing shape changed
+- Error codes now live from this milestone: `already_voted`, `review_closed`, `not_eligible_to_vote`. All three were registered in section 7 since version 1 and are reachable for the first time now
+
+**The matrix, and where it lives.**
+
+One implementation, in `ResolutionMatrix::decide()`, called from exactly one place: `ProposalResolutionService::resolveIfReady()`. Both the vote endpoint and the sweep reach it through that one method, so a proposal completed by voting and one that expired unvoted cannot be decided differently.
+
+| Confidence | Peers | Outcome |
+|---|---|---|
+| High | In favour | Approved |
+| High | Against | **Escalated**, not rejected |
+| Low | In favour | Approved |
+| Low | Against | Rejected |
+
+Two rows the table does not have, both escalating: a **tie** (`tie_no_majority`) and **nobody voting at all** (`no_votes_cast`). Neither is a majority, and defaulting either way would mean picking a side the reviewers deliberately did not pick.
+
+**Non voters are excluded from the denominator.** Two in favour and one against out of five eligible reviewers is a majority in favour, not two out of five. Silence is the absence of a position rather than opposition, which is also why there is no third vote value for abstaining: a reviewer with no view simply does not vote, and no row is written.
+
+**Resolution happens early once every eligible reviewer has voted**, rather than always waiting out the three days. Once the answer cannot change, holding the proposing seller blocked serves nobody. A proposal with **zero** eligible reviewers is the exception and never resolves early: there is nobody who could complete it, so it waits for the sweep and escalates.
+
+**Deviations from the plan.**
+- **EP-29 answers 404 to an outsider, but EP-30 answers 403.** The asymmetry is deliberate. The contract registers `not_eligible_to_vote` as a 403 for a store that was not attached when the proposal opened, and answering 404 on the vote would make that code unreachable and tell the caller nothing about why they were refused. A 403 there reveals only that some proposal holds that id, where EP-29 would have handed over the product and the whole comparison. There is a test for each half.
+- **The vote guards live in `ProposalResolutionService::castVote()`, not in the controller.** Eligibility, the closed window, and double voting are decisions about proposals rather than about HTTP, and a future caller reaching `recordVote` directly would otherwise bypass all three.
+- **`castVote` catches the unique constraint violation on `(proposal_id, store_id)` and reports it as `already_voted`.** Two requests from one store arriving together can both pass the check before either inserts. The index is what actually enforces one vote per store; this turns its error into the refusal the caller would have got a moment earlier.
+- **EP-28 keeps proposals this store has already voted on**, marked `has_voted`, rather than filtering them out. A reviewer who voted yesterday and comes back to check should find the proposal where they left it rather than conclude it vanished. It does drop proposals whose window has closed, because those cannot take another vote.
+- **EP-27 returns every status, not only the blocking ones.** A seller wants to know their submission was approved as much as they want to know what is still outstanding.
+- **The proposing store needs no rule of its own to be barred from voting.** It was excluded from its own reviewer set at M6, so it falls out at the eligibility check. Its own proposal is readable at EP-29 with `is_mine: true` and `can_vote: false`.
+- **`ProposalDetailResource` omits the proposing store's identity.** The vote is about whether the record is right, not about who said so, and naming the seller invites voting on the competitor rather than on the claim. Nothing in the contract asked for it either way.
+- **Two Pint violations in the M7 code committed earlier this day were fixed** (`ResolutionTest.php`, `ProposalVote.php`). They predate this session's endpoint work and were failing `composer test` before any of it.
+- **`Proposal`'s `@property` block was incomplete**, which surfaced as PHPStan errors the moment `resolved_at` was serialised. The missing columns are now declared rather than the errors suppressed.
+
+**Known gaps handed to the other side.**
+- **Nothing blocking. S-26, S-27, S-28, and S-29 are all unblocked.**
+- **No administrator screen resolves an escalated proposal.** EP-41 and EP-42 are M11, so a proposal that ties, that nobody votes on, or that is high confidence with peers against reaches `escalated` and **stops there, with the seller still blocked**. This is now the platform's longest dead end: M6's gap was that nothing resolved a proposal, and M7's is that one of the four outcomes still has nobody to act on it.
+- **`resolution_reason` is stored and deliberately not serialised.** It records why the matrix decided as it did, including which confidence band applied, so exposing it would leak the band by another name. The frontend gets `status` and nothing more.
+- Votes are **immutable**. No endpoint changes one, and a reviewer who changes their mind has no recourse. A vote that can be revised turns a three day window into a negotiation.
+- The reviewer email still renders through the `log` mail driver locally, so it lands in `storage/logs/laravel.log`.
+- **The sweep depends on the scheduler actually running.** `php artisan schedule:work` locally, cron in deployment. A missed run leaves a proposing seller unable to trade and nothing else in the platform notices, which is why the build plan puts it under monitoring at M12.
+
+**Verified by.**
+- 23 tests in `tests/Feature/Api/PeerReviewTest.php` over HTTP, and 18 in `tests/Feature/Api/ResolutionTest.php` at the decision level, split so a failure points at the rule rather than at the wiring around it
+- The build plan's stated M7 list, item by item: each of the four matrix rows, a tie escalating, non voters excluded from the denominator, a sole reviewer's single vote being a majority, approval creating a version and the proposing seller's attachment, rejection creating neither, a store not attached at opening unable to vote, a store that detached mid window keeping its vote, voting twice refused, voting after close refused, and two simultaneous votes resolving exactly once with **one** version written
+- The confidence score and band asserted absent from all four endpoints' raw response bodies, read as text rather than by key so a nested or renamed occurrence is caught too. `resolution_reason` asserted absent for the same reason
+- Against the live API, with the seeded catalogue and the M6 proposals still pending: a store that attached to the product **after** the proposal opened got an empty EP-28, **404** from EP-29, and **403 `not_eligible_to_vote`** from EP-30, while a frozen reviewer saw both proposals in EP-28, read the comparison `Battery: 4500 mAh -> 5200 mAh` at EP-29 with `can_vote: true`, voted approve for `{"vote_recorded":true,"proposal_status":"pending"}`, and was refused **409 `already_voted`** on the second attempt. `proposals:sweep` ran clean with no window closed. No `confidence_score`, `confidence_band`, or `resolution_reason` in any live payload
+- `composer test` green: Pint passed, PHPStan level 7 with **0 errors**, 309 tests with 304 passed and 5 todo
+
+---
+
 ## 4. Open requests
 
 Things one side needs from the other that are not yet built. Remove a row only when it has shipped and been recorded in section 3.
@@ -871,5 +930,7 @@ Things one side needs from the other that are not yet built. Remove a row only w
 | Backend | 2026-08-27 | The confidential endpoint specification writes EP-22's outcome with `attachments` and `proposal` objects, while section 11.4 of the contract writes it with `attachment_ids`, `proposal_id`, and `review_closes_at`. The contract is what the client mirrors, so the contract was implemented. Worth deciding whether 11.4 should carry `review_opens_at` and the attachment prices as well, once S-24 is built and it is clear what the screen actually needs | Open. Not blocking: the current shape is sufficient to render both outcomes |
 | Backend | 2026-08-27 | EP-19 is not paginated. A store's listings are bounded in practice, but a seller carrying hundreds of products would return one large payload | Open, low priority. Revisit if it becomes a real shape rather than a hypothetical one |
 | Frontend | 2026-08-27 | **S-26 and S-27 could not be built at M6.** The build plan lists them under this milestone, but S-26 needs EP-27 and S-27 needs EP-29, both of which are M7. Building either would have meant inventing a shape the backend has not defined. They should be built alongside M7's own screens once those endpoints land, and the "still being built" copy on the S-24 outcome panel and in X-05 replaced with real links then | Open. Not blocking: X-05 renders the proposal detail inline from EP-19, so a blocked seller sees status, dates, and the fields under review without them |
+
+| Backend | 2026-08-27 | **Nothing resolves an escalated proposal.** The matrix escalates on a tie, on no votes at all, and on high confidence with peers against, and EP-41 and EP-42 that act on that are M11. A seller whose proposal escalates stays blocked with no route out | Open. Not blocking the frontend, which renders escalated as a blocked state already. Blocking for the seller it happens to |
 
 Use this table rather than guessing. A frontend screen that needs a field the contract does not define adds a row here. It does not invent a field name and hope.

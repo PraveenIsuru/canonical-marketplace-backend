@@ -21,7 +21,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property int $id
  * @property int $proposal_id
  * @property int $store_id
- * @property bool $vote  true is in favour
+ * @property bool $vote true is in favour
  * @property string|null $comment
  */
 class ProposalVote extends Model

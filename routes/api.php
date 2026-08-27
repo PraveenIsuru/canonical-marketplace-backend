@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\EmailVerificationController;
 use App\Http\Controllers\Api\PasswordResetController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductImageController;
+use App\Http\Controllers\Api\ProposalController;
 use App\Http\Controllers\Api\SearchController;
 use App\Http\Controllers\Api\SellerStoreController;
 use App\Http\Controllers\Api\StoreController;
@@ -197,7 +198,25 @@ Route::middleware(['auth:sanctum', 'store'])->group(function (): void {
         Route::post('/attach/confirm/start', [ConfirmationController::class, 'start']);
         Route::post('/attach/confirm/submit', [ConfirmationController::class, 'submit']);
     });
-    // M7  EP-27, EP-28, EP-29, EP-30
+    /*
+     * M7 Peer review.
+     *
+     * The reads are ordinary seller reads. The vote is behind the write limiter: it is
+     * cheap to make but can resolve a proposal, which writes a version, changes a
+     * shared record, and unblocks a seller.
+     *
+     * Both static paths are declared before `/proposals/{proposal}`, so "mine" and
+     * "to-review" are never mistaken for proposal ids.
+     */
+    Route::get('/proposals/mine', [ProposalController::class, 'mine']);
+    Route::get('/proposals/to-review', [ProposalController::class, 'toReview']);
+    Route::get('/proposals/{proposal}', [ProposalController::class, 'show'])
+        ->whereNumber('proposal');
+
+    Route::post('/proposals/{proposal}/vote', [ProposalController::class, 'vote'])
+        ->whereNumber('proposal')
+        ->middleware('throttle:writes');
+
     // M8  EP-25, EP-26
     // M10 EP-39, EP-46, EP-47
 });

@@ -1,6 +1,6 @@
 # API Contract
 
-**Contract version:** 3
+**Contract version:** 4
 **Owner:** the backend repository
 **Status:** authoritative
 
@@ -429,6 +429,68 @@ The vote response carries the post vote proposal status, so the screen shows the
 
 ---
 
+### 11.8 Proposal shapes
+
+A proposal is the only way a seller's knowledge reaches a canonical record. These are the three shapes the peer review screens read.
+
+**Neither the confidence score nor the confidence band appears in any of them**, at any access level, including to the seller who wrote the proposal. Section 6 explains why: a reviewer who can see the AI's assessment votes on the assessment rather than on what they know about the product.
+
+**The list item**, returned by EP-27 and EP-28. Both paginate per section 2.
+
+```json
+{
+  "id": 77,
+  "status": "pending",
+  "review_opens_at": "2026-08-27T09:00:00Z",
+  "review_closes_at": "2026-08-30T09:00:00Z",
+  "resolved_at": null,
+  "changed_fields": ["Battery"],
+  "product": { "id": 12, "slug": "vertex-one-smartphone", "name": "Vertex One Smartphone" },
+  "votes_cast": 1,
+  "reviewer_count": 3,
+  "has_voted": false
+}
+```
+
+`reviewer_count` is the frozen reviewer set recorded when the proposal opened, not the number of stores carrying the product today. `votes_cast` counts votes actually cast, which is the denominator the resolution matrix uses: **a reviewer who does not vote is excluded rather than counted as opposed**. `has_voted` describes the calling store and is what lets EP-28 separate outstanding reviews from finished ones.
+
+**The detail**, returned by EP-29. The list item plus the change comparison.
+
+```json
+{
+  "id": 77,
+  "status": "pending",
+  "review_opens_at": "2026-08-27T09:00:00Z",
+  "review_closes_at": "2026-08-30T09:00:00Z",
+  "resolved_at": null,
+  "product": { "id": 12, "slug": "vertex-one-smartphone", "name": "Vertex One Smartphone" },
+  "changes": [
+    { "attribute": "Battery", "from": "4500 mAh", "to": "5200 mAh" }
+  ],
+  "votes_cast": 1,
+  "reviewer_count": 3,
+  "has_voted": false,
+  "is_mine": false,
+  "can_vote": true
+}
+```
+
+`changes` is an **array, not an object**, so the order the fields are reviewed in is the order they are displayed in. `from` is the record's current value and is null where the record held nothing. A proposal is accepted or rejected **as a whole**, so there is no per field state here and no endpoint accepts one.
+
+`is_mine` is true for the proposing store, which may read its own proposal but never vote on it. `can_vote` is true only when the caller is in the frozen reviewer set, has not already voted, and the window is still open. It is a rendering hint: the endpoint re-checks all three and refuses regardless of what the client believed.
+
+EP-29 answers **404** rather than 403 to a store that is neither the proposer nor a frozen reviewer. Which products a competitor is arguing about is not public.
+
+**The vote request**, accepted by EP-30.
+
+```json
+{ "vote": "approve", "comment": "Mine says 5200 mAh on the cell itself." }
+```
+
+`vote` is `approve` or `reject` and is required. `comment` is optional and free text. A vote cannot be changed once cast: EP-30 answers `already_voted` on a second attempt from the same store.
+
+---
+
 ## 12. Change log
 
 | Version | Date | Change |
@@ -436,3 +498,4 @@ The vote response carries the post vote proposal status, so the screen shows the
 | 1 | 2026-08-25 | Initial contract, written before M0. Sections 1 to 11 established |
 | 2 | 2026-08-27 | M5. Added `search_interpretation` to `result_type` in section 8, which seller catalogue search has emitted since M3 and the list omitted. Stated that `result_type` is null until a job completes, and that another user's job answers 404. Added section 11.7, the wizard submit outcome |
 | 3 | 2026-08-27 | M6. Added `confirmation_outcome` to `result_type` in section 8, which a queued confirmation submit completes as. Section 11.4 is unchanged and is what EP-22 returns |
+| 4 | 2026-08-27 | M7. Added section 11.8, the proposal list item, the detail with its change comparison, and the vote request body. EP-27 and EP-28 paginate per section 2. No existing shape changed |

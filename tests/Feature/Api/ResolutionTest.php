@@ -25,7 +25,6 @@ use App\Services\Proposals\ResolutionOutcome;
  *
  * The endpoint tests live in PeerReviewTest.php.
  */
-
 function matrix(): ResolutionMatrix
 {
     return app(ResolutionMatrix::class);
