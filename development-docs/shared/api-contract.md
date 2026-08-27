@@ -1,6 +1,6 @@
 # API Contract
 
-**Contract version:** 1
+**Contract version:** 2
 **Owner:** the backend repository
 **Status:** authoritative
 
@@ -167,13 +167,15 @@ Job status payload:
   "data": {
     "id": "9f2c1a80-...",
     "status": "queued | processing | completed | failed",
-    "result_type": "match_candidates | wizard_questions | confirmation_questions | verification_result | null",
+    "result_type": "match_candidates | wizard_questions | confirmation_questions | verification_result | search_interpretation | null",
     "result": null
   }
 }
 ```
 
-A job is readable only by the user who created it.
+`result_type` is **null until the job completes**, including on a job that failed. It names the flow the client is resuming, and there is nothing to resume until there is a result.
+
+A job is readable only by the user who created it. A job belonging to somebody else answers **404, not 403**, because distinguishing the two would confirm that an id is real.
 
 ---
 
@@ -324,7 +326,7 @@ EP-51 is the odd one out. It is **hosted by the frontend** as a Next.js route ha
 
 ## 11. Shapes that are easy to get wrong
 
-These six have caused, or would cause, a mismatch. Get them right once.
+These seven have caused, or would cause, a mismatch. Get them right once.
 
 ### 11.1 Search response
 
@@ -406,6 +408,23 @@ The vote response carries the post vote proposal status, so the screen shows the
 { "data": { "vote_recorded": true, "proposal_status": "approved", "resolved_at": "2026-08-26T10:15:00Z" } }
 ```
 
+### 11.7 Wizard submit outcome
+
+```json
+{
+  "data": {
+    "product": { "id": 88, "slug": "aurora-field-recorder-fr-2", "current_version_number": 1 },
+    "variants_generated": 6,
+    "attachments_created": 1,
+    "store_is_live": true
+  }
+}
+```
+
+`variants_generated` is the full cross product of every attribute option. `attachments_created` counts only the combinations the seller carries, so **the first will usually be larger than the second**. That gap is expected and is not an inconsistency to reconcile or to warn about on screen. The uncarried combinations exist, are permanent, and are shown on the product page as having no sellers yet.
+
+`store_is_live` becomes true here, and this is the first flow in the platform that can turn it on.
+
 ---
 
 ## 12. Change log
@@ -413,3 +432,4 @@ The vote response carries the post vote proposal status, so the screen shows the
 | Version | Date | Change |
 |---|---|---|
 | 1 | 2026-08-25 | Initial contract, written before M0. Sections 1 to 11 established |
+| 2 | 2026-08-27 | M5. Added `search_interpretation` to `result_type` in section 8, which seller catalogue search has emitted since M3 and the list omitted. Stated that `result_type` is null until a job completes, and that another user's job answers 404. Added section 11.7, the wizard submit outcome |

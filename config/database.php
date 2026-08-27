@@ -97,6 +97,23 @@ return [
             'prefix_indexes' => true,
             'search_path' => 'public',
             'sslmode' => env('DB_SSLMODE', 'prefer'),
+
+            /*
+             * Pinned to UTC, and this is not cosmetic.
+             *
+             * Laravel writes a datetime as "Y-m-d H:i:s" with no offset. PostgreSQL
+             * reads a naive value into a timestamptz column by assuming the session
+             * timezone, which defaults to whatever the server machine is set to. On a
+             * developer machine in Asia/Colombo that silently stored every timestamptz
+             * five and a half hours away from the instant the application meant, and
+             * reading it back produced a different moment than the one written.
+             *
+             * The application works in UTC throughout and the API emits ISO 8601 in
+             * UTC, so the connection has to agree. Without this a proposal's three day
+             * review window closes at the wrong time, and the deadline is the thing
+             * peer review is built on.
+             */
+            'timezone' => env('DB_TIMEZONE', 'UTC'),
         ],
 
         'sqlsrv' => [

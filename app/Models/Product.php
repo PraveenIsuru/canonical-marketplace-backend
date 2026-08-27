@@ -33,6 +33,10 @@ use Laravel\Scout\Searchable;
  * through selectSub, and are absent on a plainly loaded model.
  * @property-read int|null $lowest_price_minor
  * @property-read int|null $seller_count
+ *
+ * Attached by the matching service for the length of one response. It describes a
+ * comparison against what a seller typed, not the product, so it has no column.
+ * @property float|null $match_score
  * @property-read ProductVersion|null $currentVersion
  */
 class Product extends Model

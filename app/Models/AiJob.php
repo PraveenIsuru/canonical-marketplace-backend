@@ -48,6 +48,10 @@ class AiJob extends Model
 
     public const TYPE_SEARCH_INTERPRETATION = 'search_interpretation';
 
+    public const TYPE_MATCH_CANDIDATES = 'match_candidates';
+
+    public const TYPE_WIZARD_QUESTIONS = 'wizard_questions';
+
     /** @return BelongsTo<User, $this> */
     public function user(): BelongsTo
     {

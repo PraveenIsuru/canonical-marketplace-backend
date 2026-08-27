@@ -2,6 +2,10 @@
 
 declare(strict_types=1);
 
+use App\Models\Attachment;
+use App\Models\AttachSession;
+use App\Models\Product;
+use App\Models\Store;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
@@ -167,8 +171,54 @@ it('never lets a seller write to a product, attribute, or variant', function ():
 })->todo('M6. The only seller path into product data is a proposal');
 
 it('never removes a generated variant combination', function (): void {
-    //
-})->todo('M5 and M11. Generation is additive and permanent, for administrators too');
+    $user = User::factory()->create();
+    $store = Store::factory()->for($user)->create();
+
+    $session = AttachSession::create([
+        'store_id' => $store->id,
+        'type' => AttachSession::TYPE_WIZARD,
+        'questions' => [['id' => 'q1', 'attribute' => 'brand', 'text' => 'Who makes it?']],
+        'draft' => ['name' => 'Harbour Deck Lantern'],
+        'expires_at' => now()->addHour(),
+    ]);
+
+    // Three combinations defined, one of them carried.
+    $this->actingAs($user, 'sanctum')
+        ->postJson('/api/attach/wizard/submit', [
+            'session_id' => $session->id,
+            'answers' => ['q1' => 'Harbour'],
+            'name' => 'Harbour Deck Lantern',
+            'category' => 'Home',
+            'attributes' => [['name' => 'Finish', 'options' => ['Brass', 'Copper', 'Steel']]],
+            'carried_variants' => [
+                ['attribute_values' => ['Finish' => 'Brass'], 'price_minor' => 850000],
+            ],
+        ])
+        ->assertCreated();
+
+    /*
+     * All three exist, and the two nobody carries are not hidden, deleted, or marked
+     * inactive. They show as having no sellers yet.
+     *
+     * There is no deletion path to test against, and that absence is the invariant.
+     * What can be asserted is that generation produced every combination and that the
+     * uncarried ones survived a run that had every opportunity to skip them.
+     */
+    $product = Product::sole();
+
+    expect($product->variants()->count())->toBe(3)
+        ->and(Attachment::count())->toBe(1);
+
+    $uncarried = $product->variants()->whereJsonContains('attribute_values->Finish', 'Copper')->sole();
+
+    expect($uncarried->attachments()->count())->toBe(0);
+
+    // And the public variant list returns it, rather than omitting a combination with
+    // no sellers, which would silently reintroduce removal from the buyer's view.
+    $this->getJson("/api/products/{$product->slug}/variants")
+        ->assertOk()
+        ->assertJsonCount(3, 'data');
+});
 
 it('creates no attachment row while a proposal is pending', function (): void {
     //
@@ -187,8 +237,51 @@ it('falls back to keyword search rather than queueing, for buyer search only', f
 })->todo('M3');
 
 it('keeps a store visible if and only if it holds at least one attachment', function (): void {
-    //
-})->todo('M5 and M8');
+    $user = User::factory()->create();
+    $store = Store::factory()->for($user)->create();
+
+    // Registered, located, and carrying nothing. Onboarding cannot make a store live,
+    // and M5 is the first milestone in which anything can.
+    expect($store->is_live)->toBeFalse();
+
+    $this->getJson("/api/stores/{$store->id}")->assertNotFound();
+
+    $session = AttachSession::create([
+        'store_id' => $store->id,
+        'type' => AttachSession::TYPE_WIZARD,
+        'questions' => [['id' => 'q1', 'attribute' => 'brand', 'text' => 'Who makes it?']],
+        'draft' => ['name' => 'Harbour Deck Lantern'],
+        'expires_at' => now()->addHour(),
+    ]);
+
+    $this->actingAs($user, 'sanctum')
+        ->postJson('/api/attach/wizard/submit', [
+            'session_id' => $session->id,
+            'answers' => ['q1' => 'Harbour'],
+            'name' => 'Harbour Deck Lantern',
+            'category' => 'Home',
+            'attributes' => [],
+            'carried_variants' => [['attribute_values' => [], 'price_minor' => 850000]],
+        ])
+        ->assertCreated()
+        ->assertJsonPath('data.store_is_live', true);
+
+    // The flag and the buyer's view of it move together. A stored flag that disagreed
+    // with the attachment count is the failure this guards against.
+    expect($store->refresh()->is_live)->toBeTrue();
+
+    $this->getJson("/api/stores/{$store->id}")->assertOk();
+
+    // And the other direction. The endpoint that detaches lands at M8, so the
+    // recomputation is driven directly here rather than through a route that does not
+    // exist yet.
+    $store->attachments()->delete();
+    $store->recomputeLiveFlag();
+
+    expect($store->refresh()->is_live)->toBeFalse();
+
+    $this->getJson("/api/stores/{$store->id}")->assertNotFound();
+});
 
 it('sends every price as an integer in the smallest currency unit', function (): void {
     //

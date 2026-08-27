@@ -25,8 +25,8 @@ Update the two status columns as milestones complete. Everything else in this fi
 | M1 Accounts | Done | Done |
 | M2 Catalogue read | Done | Done |
 | M3 Search | Done | Done |
-| M4 Seller onboarding | Done | Not started |
-| M5 Wizard | Not started | Not started |
+| M4 Seller onboarding | Done | Done |
+| M5 Wizard | Done | Not started |
 | M6 Confirmation and proposals | Not started | Not started |
 | M7 Peer review | Not started | Not started |
 | M8 Listings and wishlist | Not started | Not started |
@@ -515,6 +515,131 @@ Collapsing these into one message would leave a visitor unable to tell a degrade
 
 ---
 
+### M4 Seller onboarding, frontend, 2026-08-27
+
+**Shipped.**
+- S-17 `/sell/start`, store registration
+- S-18 `/sell/pin`, manual pin placement with a draggable Leaflet map
+- S-19 `/store/settings`, prefilled from EP-54
+- S-20 `/dashboard`, the empty state
+- `(seller)` route group and layout, `lib/api/stores.ts`, `ownStoreSchema`, `components/seller/StorePinMap.tsx`
+- Seller navigation entries now light up on their own, because `AccountNav` already derived them from `session.store` and the backend populates it
+
+**Contract.**
+- Contract version at time of writing: 1
+- Changes made to api-contract.md: none
+- Error codes handled on screen: `store_exists` (409), `validation_failed` (422), `store_required` (403)
+
+**How geocoding failure is presented, which is the point of this milestone.**
+
+It is not an error, and nothing in the interface treats it as one.
+
+The API answers **201**. The store exists, the submitted details were kept, and only the location is missing. So S-17 reads `geocoding_failed` and **redirects to the pin screen**, exactly as a successful registration redirects to the dashboard. There is no red, no "failed", and no invitation to retry the form.
+
+S-18 then explains it in its own words: the address could not be matched automatically, and buyers see sellers by distance, so the seller is asked to show where they are. The same field on EP-18 routes to the same screen while keeping the previous coordinates, so an edit that failed to re-geocode never leaves a seller worse off than before.
+
+**Deviations from the plan.**
+- **`needsPinPlacement()` checks null coordinates as well as `geocoding_failed`.** The flag appears only on a write, so a settings page loading a half configured store through EP-54 can tell only from the nulls. Checking one and not the other would leave that seller with no route to the pin screen.
+- **The Leaflet marker icon is built explicitly from the packaged images.** Leaflet resolves its default icon by a relative path that the bundler rewrites, so the pin renders invisibly otherwise. This is the standard fix and has to run on the client.
+- **The numeric coordinate fields stay available even when the map works.** If tiles fail there has to be a way through, and some sellers simply know their coordinates.
+- **S-20 shows no listings table.** EP-19 lands at M6. An empty grid would imply the seller has no listings, when in fact the feature that creates them has not shipped, so the screen says that plainly instead.
+
+**Known gaps handed to the other side.**
+- Nothing blocking.
+- The dashboard states that attaching to a product is not available yet. That copy should be replaced when the attach flow lands rather than left to age.
+- `(seller)` screens are client rendered, per the plan, so their content is not in the server HTML. Route protection still happens in `proxy.ts` before the page runs, and the API refuses independently.
+- The registration rate limiter is 3 per hour per IP, which is easy to hit while testing by hand. Create the account directly and sign in, rather than assuming registration is broken.
+
+**Verified by.**
+- `npm run build`, `npm run lint`, and `npx tsc --noEmit` all clean
+- Against the production build and the live API, through the authenticated proxy:
+  - A new account reports `store: null` and every seller endpoint returns `store_required`
+  - Registration returned **201** with coordinates, `geocode_source: locationiq`, and `is_live: false`; the session then carried `{ id, name, is_live }`, which is what unlocks the seller navigation
+  - A second registration returned **409 `store_exists`**
+  - With the geocoder forced to fail, registration still returned **201** with null coordinates and the submitted details intact, and the pin endpoint then set them with `geocode_source: manual_pin` while `is_live` stayed false
+  - EP-54 prefilled the settings form and carried **no** `geocoding_failed`; a PATCH round tripped and reported it as false
+  - An address change that failed to re-geocode saved the new address, signalled `geocoding_failed`, and **preserved the previous coordinates**
+  - All four seller routes return 200 signed in and 307 to `/login?next=…` anonymously
+  - The newly registered stores are **absent** from the public seller list, because they carry nothing
+
+---
+
+### M5 The wizard path, backend, 2026-08-27
+
+**Shipped.**
+- EP-20 `POST /api/attach/match`, EP-23 `POST /api/attach/wizard/start`, EP-24 `POST /api/attach/wizard/submit`, EP-48 `POST /api/products/{slug}/images`, EP-50 `GET /api/jobs/{id}`
+- `ProductMatchingService`, `ProductWizardService`, `VariantGenerationService` with the deterministic combination hash, `ProductVersionService`
+- `AiProvider` grew `scoreProductMatches` and `generateWizardQuestions`, implemented in both the fake and the real adapter
+- `attach_sessions` table and the `AttachSession` model
+- Queued jobs `MatchProduct`, `GenerateWizardQuestions`, and `IndexProduct`
+- `ProductImageService` and a shared `ImageUpload` validator, plus the two image disks
+
+**Contract.**
+- Contract version at time of writing: **bumped from 1 to 2**
+- Changes made to api-contract.md: `search_interpretation` added to `result_type` in section 8, which seller catalogue search has emitted since M3 and the list omitted; stated that `result_type` is null until a job completes and that another user's job answers 404; added section 11.7, the wizard submit outcome
+- Error codes now live from this milestone: `match_required`, `unsupported_media_type`, `file_too_large`, `image_limit_reached`
+
+**Response shapes the frontend should code against.**
+- EP-20 returns `{ data: { candidates: [...] } }`. **An empty array is a success, not an error.** It is the answer that routes the seller to the wizard, and nothing in the interface should style it as a failure
+- Each candidate is `{ product_id, slug, name, primary_image_url, match_score }`. `primary_image_url` is **null** where the record holds no images, which is common
+- `match_score` is between 0 and 1. It is **not** the confidence score the contract forbids exposing. That one is written to a proposal at M6 and drives the resolution matrix; this one describes a search result and decides nothing
+- EP-23 returns `{ data: { session_id, questions: [{ id, attribute, text }], expires_at } }`. `expires_at` is not in the api specification and was added here: a session lasts **24 hours**, and a client that cannot see the deadline cannot warn anyone about it
+- EP-24 returns the shape now recorded in section 11.7 of the contract
+- EP-48 returns `{ data: { id, url, mime_type, position, uploaded_by_user_id } }`. There is no storage path and no moderation status
+- EP-50 returns `result_type` and `result` as **null until the job completes**, on a failed job included
+
+**Deviations from the plan.**
+- **EP-23 re-runs matching itself rather than trusting the client.** The rule is that the wizard is reachable only when matching returned nothing, and a client that reports its own compliance is not enforcing anything. It costs one extra provider call per wizard start, which is the right price for making `match_required` mean something. The alternative was a match token in the request, which would have been a shape invented to avoid doing the check.
+- **The shortlist for matching comes from PostgreSQL, not Meilisearch**, even though buyer search uses the index. Two reasons. Indexing runs off the request, so a product created moments ago by another seller may not be searchable yet, and missing it would admit exactly the duplicate this step exists to catch, invisibly. And the index is an external service: buyer search may degrade to keyword results because a worse list is still useful, but matching cannot degrade at all. The AI then scores the shortlist, so retrieval is generous and precision is the provider's job.
+- **`AiProvider::scoreProductMatches` takes candidates rather than going looking for them.** An adapter that queried the database would be a vendor class holding a business query, and asking a model to recall the whole catalogue from a prompt is not something any model does reliably. The reply refers to candidates by their position in the prompt, so an invented product id cannot reach the database.
+- **`attach_sessions` is a new table, not in the schema design.** The endpoints hand back a `session_id` submitted later, the provider may be unavailable when the questions are wanted, and completeness has to be checkable: a client supplying both the questions and the answers could always claim it answered them. It carries a `type` column so the confirmation flow at M6 uses the same table rather than a second one with the same five columns.
+- **An unanswered wizard question returns `validation_failed`, not `confirmation_incomplete`.** That code belongs to the confirmation flow at M6, where it means a seller skipped part of a review of an existing record. Here the errors name the specific questions, keyed `answers.q2`, which is more useful, and borrowing the other code would make a client handling it show the wrong screen.
+- **An expired session returns `match_required`.** The seller has to start again, because the catalogue may have gained the very product they are describing while the session sat open, and matching has to run before the wizard opens a second time.
+- **`carried_variants` requires at least one entry.** A seller reaches the wizard in order to sell something, and a run carrying nothing would create a permanent canonical record while leaving the store dark, which is not an outcome the flow describes.
+- **A carried combination the defined attributes cannot produce is refused, not skipped.** Skipping it would report a lower attachment count than the seller listed, with no way for them to find out which entry vanished.
+- **`image_limit_reached` is 422, following the contract.** The api specification writes it as 409. The contract is what the client mirrors, so 422 wins. Noted rather than silently chosen, the same way the `geocoding_failed` placement was at M4.
+- **EP-20 does not check `proposal_pending`.** The refusal is listed for it, but no proposal can exist until M6 creates one, and the check needs a product that matching has not yet identified. Blocking all matching because a seller has a pending proposal on some unrelated product would be far broader than the rule, which blocks a seller on **that** product only. It is enforced at EP-21 at M6, where the product is known.
+- **Search indexing is dispatched after the transaction commits, not by Scout's observer.** The observer fires on save, which is inside the transaction, so an indexed product could be advertised before its row committed and would stay in the index if the transaction rolled back.
+- Frontend revalidation and nearby availability alerts are listed among EP-24's dispatches but belong to M12 and M8. Neither is dispatched yet.
+
+**A timezone defect found and fixed, which was not an M5 bug.**
+
+`timestamptz` values were being stored at the wrong instant. Laravel writes a datetime as `Y-m-d H:i:s` with no offset, and PostgreSQL reads a naive value into a `timestamptz` by assuming the session timezone, which defaults to the server machine's. On this machine that is Asia/Colombo, so every such value was stored five and a half hours away from the moment the application meant, and reading it back produced a different instant than the one written.
+
+It surfaced here because `attach_sessions.expires_at` is the first `timestamptz` compared against `now()`: a session set to expire in one hour was already expired on the next request. It was never specific to M5. `config/database.php` now pins the connection to UTC.
+
+Left unfixed it would have reached M6 and M7 as a **wrong proposal deadline**. A three day review window computed and compared through that column would have closed hours early or late, and the peer review resolution matrix is built entirely on that deadline. It would have looked like a scheduling bug rather than a connection setting.
+
+**The two image disks from M0 now exist.** The M0 plan called for product images and verification photographs on separate disks from the beginning, and it was not done. `ProductImage::url()` already read a config key that did not exist and fell back to the public disk. Both disks are now defined. Verification photographs are private and nothing serves a URL from that disk, so the unconditional deletion at M9 cannot reach catalogue images.
+
+**`php artisan storage:link` is now a setup step.** It had never been run, which nothing had noticed because no endpoint served a file until now. Without the link, an image URL does not 404. It returns **403**, because Laravel's own `storage/{path}` route, registered by the `local` disk, catches the request and looks for the file on the private disk instead. That is a confusing failure to debug from the outside, since the upload succeeds, the row is correct, and the bytes are on disk. This is a machine level step like the CA bundle at M3, so a fresh clone needs it too.
+
+**Known gaps handed to the other side.**
+- **EP-19 `GET /api/stores/mine/listings` still does not exist.** It lands at M6, so the dashboard still cannot list what a seller carries, even now that the wizard creates listings.
+- The confirmation path is not built. A seller whose product **does** match has nowhere to go after EP-20 returns candidates until M6 ships EP-21 and EP-22. Matching answers, and the flow stops there.
+- `variants_generated` will usually exceed `attachments_created`. Do not present that as a warning or an error. The uncarried combinations are permanent and appear on the product page with no sellers.
+- The wizard image ordering in UF-16 puts image upload before submit, but EP-48 needs a product slug, so the product must exist first. Upload after the submit returns, against the slug it gives back.
+- The fake AI provider asks the **same six wizard questions every time**, and says so in its own docblock. That is enough to build S-25 against, but the questions are not tailored to the product until `AI_PROVIDER=anthropic`.
+- The fake matcher scores on name word overlap above 0.45. A near identical name matches and a genuinely different one does not, which is a convenient way to demonstrate both branches without changing config.
+- The `attach` limiter is **20 per hour**, which is easy to reach while testing the flow by hand.
+
+**Verified by.**
+- 39 tests in `tests/Feature/Api/WizardTest.php`, covering the cross product for zero, one, and two attributes, the single default variant where none were defined, version 1 created with the pointer set, attachments created only for carried combinations, the eight image ceiling, the format and size limits, an empty match result answering 200, `match_required` when a candidate is outstanding, and a job readable only by its owner
+- The transaction rollback is tested by throwing part way through, after the product row exists and while attributes are being created. Product, attributes, variants, version, and attachment are all absent afterwards, the store is still dark, and the session survives so the seller can retry against the same questions
+- Two invariants moved from todo to asserted: generated combinations survive a run that carried only one of them and are still returned by the public variant list, and a store is visible if and only if it holds an attachment, tested in both directions
+- `composer test` green: Pint passed, PHPStan level 7 with **0 errors**, 228 tests with 221 passed and 7 todo
+- Live against the running server, walked end to end:
+  - A new account got 403 `store_required` on the attach routes, then registered a store
+  - EP-20 on a seeded product name returned one candidate at score 1.0; EP-23 on the same name returned **422 `match_required`**
+  - EP-20 on a genuinely new product returned **200 with an empty array**, and EP-23 then opened a session with six questions and an expiry 24 hours out
+  - EP-24 with one question blank returned 422 with the error keyed `answers.q3`, naming the question rather than the form
+  - EP-24 complete, with two attributes of two and three options and two combinations carried, returned **201 with `variants_generated: 6`, `attachments_created: 2`, `store_is_live: true`**
+  - The public variant list returned **all six** combinations, the four uncarried ones showing `seller_count: 0` and a null lowest price; the product response carried no `created_by_store_id` and no confidence field
+  - The store, dark a moment earlier, answered 200 and appeared on the product's seller list at both prices
+  - EP-48 stored a real JPEG and the URL served it as `image/jpeg`; a PDF sent as `front.jpg` with `Content-Type: image/jpeg` was refused **`unsupported_media_type`**, which is the guessed type doing its job rather than the claimed one
+  - With the provider forced to fail, EP-20 returned **503** with `queued_job_id` at the top level. EP-50 reported `queued` with a null `result_type`, and the same id under a different account returned **404**. After the provider recovered and the worker ran, EP-50 reported `completed`, `result_type: match_candidates`, the candidate, and `image_considered: false`
+  - The wizard created product was indexed and came back from buyer search
+
 ---
 
 ## 4. Open requests
@@ -524,7 +649,7 @@ Things one side needs from the other that are not yet built. Remove a row only w
 | Raised by | Date | Need | Status |
 |---|---|---|---|
 | Backend | 2026-08-26 | A Meilisearch server must be installed and running before M3 search work | **Closed 2026-08-26.** M3 shipped against it: the seeded catalogue is indexed and both search endpoints answer from it |
-| Backend | 2026-08-26 | Redis must be available before queued AI work needs Horizon's visibility, or the queue driver decision revisited | Open, blocks nothing yet |
+| Backend | 2026-08-26 | Redis must be available before queued AI work needs Horizon's visibility, or the queue driver decision revisited | Open, and now less theoretical. M5 added three queued jobs, two of which a seller is actively waiting on. The database driver still works |
 | Frontend | 2026-08-26 | No endpoint lists live stores, so S-07 cannot be prerendered at build time through `generateStaticParams`. It renders on demand and caches for 300 seconds instead | Open, low priority. Only affects build time prerendering, not correctness |
 
 Use this table rather than guessing. A frontend screen that needs a field the contract does not define adds a row here. It does not invent a field name and hope.

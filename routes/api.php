@@ -2,11 +2,14 @@
 
 declare(strict_types=1);
 
+use App\Http\Controllers\Api\AiJobController;
+use App\Http\Controllers\Api\AttachController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\EmailVerificationController;
 use App\Http\Controllers\Api\PasswordResetController;
 use App\Http\Controllers\Api\ProductController;
+use App\Http\Controllers\Api\ProductImageController;
 use App\Http\Controllers\Api\SearchController;
 use App\Http\Controllers\Api\SellerStoreController;
 use App\Http\Controllers\Api\StoreController;
@@ -125,7 +128,12 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::post('/stores', [SellerStoreController::class, 'store'])
         ->middleware('throttle:writes');
 
-    // M5  EP-50
+    /*
+     * M5 EP-50. Auth rather than Seller, because buyer facing AI work queues here too
+     * from M9 onward. The job's own owner check is what actually protects it.
+     */
+    Route::get('/jobs/{job}', [AiJobController::class, 'show']);
+
     // M8  EP-36, EP-37, EP-38
     // M9  EP-32, EP-33, EP-34, EP-35
 });
@@ -151,8 +159,26 @@ Route::middleware(['auth:sanctum', 'store'])->group(function (): void {
     Route::post('/stores/mine/pin', [SellerStoreController::class, 'placePin'])
         ->middleware('throttle:writes');
 
-    // M4  EP-17, EP-18, EP-54
-    // M5  EP-20, EP-23, EP-24, EP-48
+    /*
+     * M5 The attachment flow.
+     *
+     * Behind the `attach` limiter, which is 20 per hour. Each of these costs a provider
+     * call, and the wizard submit writes a permanent canonical record, so the quota is
+     * deliberately far tighter than the general write limit.
+     */
+    Route::middleware('throttle:attach')->group(function (): void {
+        Route::post('/attach/match', [AttachController::class, 'match']);
+        Route::post('/attach/wizard/start', [AttachController::class, 'wizardStart']);
+        Route::post('/attach/wizard/submit', [AttachController::class, 'wizardSubmit']);
+    });
+
+    /*
+     * M5 EP-48. Bound by slug, like every other product route, because that is the
+     * product's route key and public URLs are keyed by it.
+     */
+    Route::post('/products/{product}/images', [ProductImageController::class, 'store'])
+        ->middleware('throttle:writes');
+
     // M6  EP-19, EP-21, EP-22
     // M7  EP-27, EP-28, EP-29, EP-30
     // M8  EP-25, EP-26
