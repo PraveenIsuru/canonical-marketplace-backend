@@ -36,15 +36,13 @@ final class StoreController extends Controller
             throw ApiException::notFound();
         }
 
-        $payload = $this->cache->rememberStore($store->id, 'profile', function () use ($store, $request): array {
+        return $this->cache->rememberStore($store->id, 'profile', function () use ($store, $request): JsonResponse {
             // Eager loaded together, because rendering the listing rows touches the
             // variant and the product for every attachment and would otherwise be an
             // N+1.
             $store->load(['attachments.variant', 'attachments.product']);
 
-            return (new StoreResource($store))->response($request)->getData(true);
+            return (new StoreResource($store))->response($request);
         });
-
-        return response()->json($payload);
     }
 }

@@ -64,14 +64,14 @@ final class ProductController extends Controller
          * phones category is a different answer from page one of everything, and a key
          * that ignored it would serve the first page under every page number.
          */
-        $payload = $this->cache->rememberCatalogue(
+        return $this->cache->rememberCatalogue(
             'products',
             [
                 'category' => $category,
                 'per_page' => $perPage,
                 'page' => (int) $request->integer('page', 1),
             ],
-            function () use ($category, $perPage, $request): array {
+            function () use ($category, $perPage, $request): JsonResponse {
                 $products = Product::query()
                     ->with('images')
                     ->when(
@@ -84,11 +84,9 @@ final class ProductController extends Controller
                     ->orderByDesc('products.created_at')
                     ->paginate($perPage);
 
-                return ProductSummaryResource::collection($products)->response($request)->getData(true);
+                return ProductSummaryResource::collection($products)->response($request);
             },
         );
-
-        return response()->json($payload);
     }
 
     /**
@@ -99,14 +97,12 @@ final class ProductController extends Controller
      */
     public function show(Request $request, Product $product): JsonResponse
     {
-        $payload = $this->cache->rememberProduct($product, 'record', function () use ($product, $request): array {
+        return $this->cache->rememberProduct($product, 'record', function () use ($product, $request): JsonResponse {
             $product->loadMissing(['images', 'productAttributes', 'currentVersion']);
             $product->setAttribute('seller_count', $this->sellerCountFor($product));
 
-            return (new ProductResource($product))->response($request)->getData(true);
+            return (new ProductResource($product))->response($request);
         });
-
-        return response()->json($payload);
     }
 
     /**
@@ -117,7 +113,7 @@ final class ProductController extends Controller
      */
     public function variants(Request $request, Product $product): JsonResponse
     {
-        $payload = $this->cache->rememberProduct($product, 'variants', function () use ($product, $request): array {
+        return $this->cache->rememberProduct($product, 'variants', function () use ($product, $request): JsonResponse {
             $variants = $product->variants()
                 ->select('variants.*')
                 ->selectSub(
@@ -141,10 +137,8 @@ final class ProductController extends Controller
                 ->orderBy('id')
                 ->get();
 
-            return VariantResource::collection($variants)->response($request)->getData(true);
+            return VariantResource::collection($variants)->response($request);
         });
-
-        return response()->json($payload);
     }
 
     /**
@@ -170,18 +164,16 @@ final class ProductController extends Controller
      */
     public function summary(Product $product): JsonResponse
     {
-        $payload = $this->cache->rememberProduct($product, 'summary', function () use ($product): array {
+        return $this->cache->rememberProduct($product, 'summary', function () use ($product): JsonResponse {
             $summary = $product->summary;
 
-            return [
+            return response()->json([
                 'data' => $summary === null ? null : [
                     'summary' => $summary->summary_text,
                     'generated_at' => $summary->generated_at->toIso8601String(),
                 ],
-            ];
+            ]);
         });
-
-        return response()->json($payload);
     }
 
     /** Lowest price across live stores only. Null where no live store carries it. */

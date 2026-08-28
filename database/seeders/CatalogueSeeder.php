@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Database\Seeders;
 
 use App\Models\Attachment;
+use App\Models\CommunityPost;
 use App\Models\CommunitySummary;
 use App\Models\Product;
 use App\Models\ProductAttribute;
@@ -16,6 +17,7 @@ use App\Models\ProposalVote;
 use App\Models\Store;
 use App\Models\User;
 use App\Models\Variant;
+use App\Models\VerificationAttempt;
 use App\Services\Catalogue\ProductVersionService;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Seeder;
@@ -48,6 +50,7 @@ class CatalogueSeeder extends Seeder
         $this->createVersionHistory($stores);
         $this->createViewHistory($stores);
         $this->createEscalatedProposal($stores);
+        $this->createCommunityThread();
 
         $this->command->info('Catalogue seeded.');
     }
@@ -528,6 +531,79 @@ class CatalogueSeeder extends Seeder
      * application uses means the seeded data cannot disagree with what the application
      * would have produced.
      */
+    /**
+     * A verified owner and a short discussion on the phone.
+     *
+     * Added at M12, closing an open request raised at frontend M11. S-06 and its four
+     * composer states shipped at M9, and the administrator remove shipped at M11, and
+     * none of them had any seeded data to render against: every one had to be
+     * demonstrated on a thread made by hand, which costs a photograph upload and an AI
+     * call per product.
+     *
+     * ## The verification is written directly, and that is the point worth explaining
+     *
+     * Posting requires having verified ownership of **this** product, which normally
+     * means uploading a photograph of it and having a provider read a generated code
+     * off the picture. A seeder cannot do that, and faking it by relaxing the rule
+     * would be seeding a state the application cannot produce.
+     *
+     * What is written instead is the state a real verification **leaves behind**: a
+     * passed attempt for this user and this product, with the photograph already gone.
+     * `photo_deleted_at` is set for the same reason: invariant 7 says a photograph is
+     * deleted once verification concludes, whether it passed or failed, so a seeded
+     * attempt with a photograph still attached would be a state the platform never
+     * allows to exist.
+     *
+     * The buyer is `test@example.com`, the account already seeded for signing in, so
+     * the composer's verified state is reachable by logging in rather than by finding
+     * out which of several buyers happens to be the verified one.
+     */
+    private function createCommunityThread(): void
+    {
+        $product = Product::query()->where('slug', 'vertex-one-smartphone')->firstOrFail();
+        $buyer = User::query()->where('email', 'test@example.com')->firstOrFail();
+
+        VerificationAttempt::create([
+            'user_id' => $buyer->id,
+            'product_id' => $product->id,
+            'generated_code' => Str::upper(Str::random(6)),
+            'attempt_number' => 1,
+            'outcome' => VerificationAttempt::OUTCOME_PASSED,
+            'ai_reasoning' => 'The generated code was legible in the photograph beside the device.',
+            // Invariant 7. A concluded verification never leaves its photograph behind.
+            'photo_deleted_at' => CarbonImmutable::now('UTC')->subDays(12),
+        ]);
+
+        /*
+         * A top level post with a reply, rather than one post.
+         *
+         * S-06 renders replies as a nested thread and the administrator remove reports
+         * how many replies went with a removed parent, so a flat thread would leave the
+         * more interesting half of both untested. One reply is enough to show the
+         * nesting and to make `replies_hidden: 1` a real number rather than a zero.
+         */
+        $post = CommunityPost::create([
+            'product_id' => $product->id,
+            'user_id' => $buyer->id,
+            'body' => 'Six months in and the battery still gets me through a full day. '
+                .'The camera struggles in low light, which is the one thing I would want to know before buying.',
+        ]);
+
+        $post->forceFill(['created_at' => CarbonImmutable::now('UTC')->subDays(11)])->save();
+
+        $reply = CommunityPost::create([
+            'product_id' => $product->id,
+            'user_id' => $buyer->id,
+            'parent_id' => $post->id,
+            'body' => 'Worth adding that the 256GB version is the same phone otherwise. '
+                .'Nothing about the camera changes with the capacity.',
+        ]);
+
+        $reply->forceFill(['created_at' => CarbonImmutable::now('UTC')->subDays(9)])->save();
+
+        $this->command->info('One verified owner seeded, with a two post discussion on the phone.');
+    }
+
     private function attach(Store $store, Variant $variant, int $priceMinor, bool $available = true): void
     {
         Attachment::factory()->create([

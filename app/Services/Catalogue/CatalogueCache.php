@@ -7,8 +7,10 @@ namespace App\Services\Catalogue;
 use App\Models\Product;
 use Closure;
 use Illuminate\Contracts\Cache\Repository;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 
 /**
  * The catalogue read cache, and the one place that decides when it is wrong.
@@ -38,6 +40,21 @@ use Illuminate\Support\Facades\DB;
  * development and on Redis in production. That equivalence is the point: the cache that
  * is tested locally is the cache that runs.
  *
+ * ## What is stored is the finished JSON, byte for byte
+ *
+ * Not the query result, and not the serialised array either. The callbacks below build
+ * a `JsonResponse` and what goes into the cache is its body exactly as it would have
+ * been sent, so a cached answer and an uncached one are the same bytes by construction.
+ *
+ * That is not a micro optimisation, it is a correctness rule, and it was written after
+ * getting it wrong. Caching `->getData(true)` instead looks equivalent and is not: it
+ * decodes the JSON into an associative array, which turns every empty `stdClass` into
+ * an empty array, so `attribute_values: {}` on a product with no attributes came back
+ * as `attribute_values: []`. Every resource in this application casts those maps to
+ * `object` on purpose, precisely so an empty one is an empty map rather than an empty
+ * list, and a cache that decodes and re-encodes quietly undoes all of it. The client's
+ * zod schema caught it during a production build. Nothing else would have.
+ *
  * Generations are microsecond stamps rather than an incrementing count. A counter that
  * is evicted restarts at zero and starts handing out namespaces that already hold
  * entries, which would serve genuinely stale data. A stamp that is evicted produces a
@@ -49,52 +66,43 @@ final class CatalogueCache
     private const PREFIX = 'catalogue';
 
     /**
-     * Reads a product scoped payload, computing it only when it is not already held.
+     * Reads a product scoped response, building it only when it is not already held.
      *
-     * @template TValue
-     *
-     * @param  Closure(): TValue  $callback
-     * @return TValue
+     * @param  Closure(): JsonResponse  $build
      */
-    public function rememberProduct(Product $product, string $facet, Closure $callback): mixed
+    public function rememberProduct(Product $product, string $facet, Closure $build): JsonResponse
     {
         return $this->remember(
             $this->productKey($product->id, $facet),
             (int) config('catalogue.cache.ttl'),
-            $callback,
+            $build,
         );
     }
 
     /**
-     * Reads a store scoped payload.
+     * Reads a store scoped response.
      *
-     * @template TValue
-     *
-     * @param  Closure(): TValue  $callback
-     * @return TValue
+     * @param  Closure(): JsonResponse  $build
      */
-    public function rememberStore(int $storeId, string $facet, Closure $callback): mixed
+    public function rememberStore(int $storeId, string $facet, Closure $build): JsonResponse
     {
         return $this->remember(
             $this->storeKey($storeId, $facet),
             (int) config('catalogue.cache.ttl'),
-            $callback,
+            $build,
         );
     }
 
     /**
-     * Reads a catalogue wide payload, such as the paginated listing or the categories.
+     * Reads a catalogue wide response, such as the paginated listing or the categories.
      *
      * The parameters are part of the key, because page two of the phones category is a
      * different answer from page one of everything.
      *
-     * @template TValue
-     *
      * @param  array<string, mixed>  $parameters
-     * @param  Closure(): TValue  $callback
-     * @return TValue
+     * @param  Closure(): JsonResponse  $build
      */
-    public function rememberCatalogue(string $facet, array $parameters, Closure $callback): mixed
+    public function rememberCatalogue(string $facet, array $parameters, Closure $build): JsonResponse
     {
         ksort($parameters);
 
@@ -106,7 +114,7 @@ final class CatalogueCache
             md5((string) json_encode($parameters)),
         );
 
-        return $this->remember($key, (int) config('catalogue.cache.listing_ttl'), $callback);
+        return $this->remember($key, (int) config('catalogue.cache.listing_ttl'), $build);
     }
 
     /**
@@ -168,18 +176,35 @@ final class CatalogueCache
     /**
      * Reads through the cache, or straight past it when the layer is switched off.
      *
-     * @template TValue
-     *
-     * @param  Closure(): TValue  $callback
-     * @return TValue
+     * @param  Closure(): JsonResponse  $build
      */
-    private function remember(string $key, int $ttl, Closure $callback): mixed
+    private function remember(string $key, int $ttl, Closure $build): JsonResponse
     {
         if (config('catalogue.cache.enabled') !== true) {
-            return $callback();
+            return $build();
         }
 
-        return $this->store()->remember($key, $ttl, $callback);
+        $json = $this->store()->remember($key, $ttl, static function () use ($build): string {
+            $body = $build()->getContent();
+
+            /*
+             * `getContent` is typed as `string|false`, and false means the response
+             * could not be rendered at all. Caching that would store an answer nobody
+             * can read for an hour, so it is refused loudly here instead.
+             */
+            if ($body === false) {
+                throw new RuntimeException('A catalogue response could not be rendered for caching.');
+            }
+
+            return $body;
+        });
+
+        /*
+         * Rebuilt from the stored bytes rather than re-encoded from a structure, which
+         * is what keeps a cached answer identical to an uncached one. See the note on
+         * empty maps in the class docblock.
+         */
+        return JsonResponse::fromJsonString($json);
     }
 
     private function productKey(int $productId, string $facet): string

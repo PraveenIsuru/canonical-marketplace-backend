@@ -316,3 +316,70 @@ it('answers correctly with the whole layer switched off', function (): void {
         ->assertOk()
         ->assertJsonPath('data.0.lowest_price_minor', 9_000);
 });
+
+/*
+|--------------------------------------------------------------------------
+| The cached bytes must be the uncached bytes
+|--------------------------------------------------------------------------
+*/
+
+it('keeps an empty attribute map an empty map, cold and warm', function (): void {
+    /*
+     * The regression that a production build of the client caught, and nothing else
+     * would have.
+     *
+     * A product with no attributes has one default variant whose `attribute_values` is
+     * an empty map. Every resource in this application casts those to `object` on
+     * purpose, so it serialises as `{}` rather than `[]`, and the client's zod schema
+     * declares it a record and refuses a list.
+     *
+     * The first version of this cache stored `->getData(true)`, which decodes the JSON
+     * into an associative array and turns every empty `stdClass` into an empty array.
+     * The uncached response was right and the cached one was wrong, which is the worst
+     * shape a caching bug can take: it passes every test that reads the endpoint once.
+     * Hence both halves below.
+     */
+    $product = Product::factory()->create(['name' => 'Solo Earbuds E-1', 'slug' => 'solo-earbuds-e-1']);
+    Variant::factory()->for($product)->combination([])->create();
+
+    $cold = $this->getJson("/api/products/{$product->slug}/variants")->assertOk();
+    $warm = $this->getJson("/api/products/{$product->slug}/variants")->assertOk();
+
+    expect($cold->getContent())->toBe($warm->getContent())
+        ->and($cold->json('data.0.attribute_values'))->toBe([])
+        // An array in PHP either way, so the JSON itself is what has to be checked.
+        ->and($cold->getContent())->toContain('"attribute_values":{}')
+        ->and($warm->getContent())->toContain('"attribute_values":{}');
+});
+
+it('serves byte identical responses cached and uncached, across the public catalogue', function (): void {
+    /*
+     * The general form of the test above. A cache is only safe if a hit and a miss are
+     * indistinguishable, so rather than trusting that, each endpoint is read with the
+     * layer off and again with it on, and the bytes are compared.
+     */
+    $product = cachedProduct();
+    cachedStoreCarrying($product);
+    $storeId = $product->variants()->first()->attachments()->first()->store_id;
+
+    $paths = [
+        '/api/products',
+        '/api/categories',
+        "/api/products/{$product->slug}",
+        "/api/products/{$product->slug}/variants",
+        "/api/products/{$product->slug}/summary",
+        "/api/stores/{$storeId}",
+    ];
+
+    foreach ($paths as $path) {
+        config()->set('catalogue.cache.enabled', false);
+        $uncached = $this->getJson($path)->assertOk()->getContent();
+
+        config()->set('catalogue.cache.enabled', true);
+        $cold = $this->getJson($path)->assertOk()->getContent();
+        $warm = $this->getJson($path)->assertOk()->getContent();
+
+        expect($cold)->toBe($uncached, "cold {$path} differed from uncached")
+            ->and($warm)->toBe($uncached, "warm {$path} differed from uncached");
+    }
+});

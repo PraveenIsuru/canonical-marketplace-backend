@@ -33,7 +33,7 @@ final class CategoryController extends Controller
      */
     public function index(): JsonResponse
     {
-        $categories = $this->cache->rememberCatalogue('categories', [], fn () => DB::table('products')
+        return $this->cache->rememberCatalogue('categories', [], fn (): JsonResponse => response()->json(['data' => DB::table('products')
             ->select('category')
             ->selectRaw('COUNT(*) as product_count')
             ->groupBy('category')
@@ -43,8 +43,6 @@ final class CategoryController extends Controller
                 'name' => $row->category,
                 'product_count' => (int) $row->product_count,
             ])
-            ->all());
-
-        return response()->json(['data' => $categories]);
+            ->all()]));
     }
 }
