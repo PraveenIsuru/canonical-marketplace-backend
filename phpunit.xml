@@ -36,6 +36,23 @@
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <!--
+            EP-51 is off unless a test turns it on.
+
+            The queue runs synchronously here, so a dispatched revalidation would make a
+            real HTTP request to a frontend that is not running, on every test that
+            creates a version. The tests that care about the webhook enable it and fake
+            the HTTP client, which is also the only way to assert what was sent.
+        -->
+        <env name="REVALIDATE_ENABLED" value="false"/>
+        <!--
+            Catalogue caching is left ON, deliberately.
+
+            The array store is per test, so it exercises the invalidation without
+            leaking between tests. A suite that disabled it would pass happily while the
+            cache served yesterday's price to every real visitor, which is precisely the
+            failure worth catching here.
+        -->
+        <!--
             Scout is disabled outright in tests.
 
             Product is Searchable, so without this every factory created product is

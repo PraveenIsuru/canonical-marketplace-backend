@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Concerns\InvalidatesCatalogueCache;
 use Database\Factories\StoreFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -34,7 +35,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 class Store extends Model
 {
     /** @use HasFactory<StoreFactory> */
-    use HasFactory, SoftDeletes;
+    use HasFactory, InvalidatesCatalogueCache, SoftDeletes;
 
     protected $fillable = [
         'user_id',
@@ -55,6 +56,32 @@ class Store extends Model
      * It comes back from the database as binary WKB, which no client has any use for.
      */
     protected $hidden = ['location'];
+
+    /**
+     * A store write makes the store's own page wrong, and sometimes far more than that.
+     *
+     * The live flag is the case worth separating. Its name and address only appear on
+     * its own page, but its visibility decides whether it is counted on the page of
+     * every product it carries, so a flip has to reach all of them. `wasChanged` is what
+     * tells the two apart, so an ordinary details edit does not pay for the wide sweep.
+     */
+    protected static function booted(): void
+    {
+        static::saved(function (self $store): void {
+            self::catalogueCache()->forgetStore(
+                $store->id,
+                withCarriedProducts: $store->wasChanged('is_live'),
+            );
+        });
+
+        /*
+         * A soft delete does not run through save, so it would miss the hook above.
+         * It has to be caught, because every catalogue query excludes deleted stores:
+         * a store removed without this would keep being counted on the product pages
+         * it used to appear on until those entries expired on their own.
+         */
+        static::deleted(fn (self $store) => self::catalogueCache()->forgetStore($store->id, withCarriedProducts: true));
+    }
 
     /**
      * is_live is deliberately not fillable. Visibility is derived from attachment

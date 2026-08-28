@@ -162,9 +162,11 @@ Do not begin the next milestone before this list is complete. The build order ex
 | Service | Purpose | Used from |
 |---|---|---|
 | PostgreSQL 16 with PostGIS | Primary database, distance calculation, JSONB | Backend only |
-| Redis 7 | Cache and queue | Backend only |
+| Redis 7 | Cache and queue. **Optional in development**, see below | Backend only |
 | Meilisearch | Product search and the keyword fallback path | Backend only |
 | Mailpit or similar | Catching outbound SMTP in development | Backend, inspected by hand |
+
+**Redis is optional in development and required for Horizon.** Settled at M12. Everything the platform does works on the database cache and queue drivers, which is how it is developed: EP-51 revalidation, catalogue caching, the live flag reconciliation, and the `maintenance:health` check all behave identically either way, and the whole test suite runs against them. What Redis buys is speed, and what it unlocks is Horizon, which is the dashboard, the metrics, the failed job list, and the queue wait thresholds. **Horizon also needs the `pcntl` and `posix` extensions, so it cannot run on Windows at all**, regardless of Redis. The backend M12 log entry carries the full table of what works without it.
 
 The frontend talks to **nothing** on this list. It talks to the Laravel API and nothing else. If a frontend task appears to need a database, a cache, or a search index, the task has been misread.
 

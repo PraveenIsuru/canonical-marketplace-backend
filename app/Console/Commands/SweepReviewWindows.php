@@ -4,21 +4,20 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
-use App\Models\Proposal;
-use App\Services\Proposals\ProposalResolutionService;
+use App\Jobs\ResolveExpiredReviewWindows;
 use Illuminate\Console\Command;
 
 /**
- * Resolves proposals whose three day review window has run out.
+ * Runs the review window sweep here and now, without waiting for a worker.
  *
- * This job matters more than its size suggests. A proposal that receives no votes must
- * escalate, and the proposing seller is blocked from selling the product until it
- * resolves, so **a missed run leaves a seller unable to trade**. It is not best effort
- * work: if this stops running, sellers quietly stay blocked and nothing else in the
- * platform notices.
+ * The work lives in [ResolveExpiredReviewWindows]. This command exists so an operator
+ * can force a sweep and watch what it decides, which is the first thing anybody does
+ * when a seller reports being stuck. Running it inline rather than dispatching it means
+ * the output appears in the terminal rather than in a worker's log, and it works on a
+ * machine with no queue worker running at all.
  *
- * Every resolution goes through the same matrix the vote endpoint uses, so a proposal
- * that expires and one that completes by voting cannot be decided differently.
+ * The schedule dispatches the job instead, so the routine path is queued and visible in
+ * Horizon and the manual path is immediate. Both run the same code.
  */
 final class SweepReviewWindows extends Command
 {
@@ -26,30 +25,28 @@ final class SweepReviewWindows extends Command
 
     protected $description = 'Resolve proposals whose review window has closed';
 
-    public function handle(ProposalResolutionService $resolution): int
+    public function handle(): int
     {
-        $expired = Proposal::query()
-            ->where('status', Proposal::STATUS_PENDING)
-            ->where('review_closes_at', '<=', now())
-            // Oldest first, so a backlog after an outage clears in the order sellers
-            // have been waiting rather than in whatever order the index returns.
-            ->orderBy('review_closes_at')
-            ->get();
+        $job = new ResolveExpiredReviewWindows;
 
-        foreach ($expired as $proposal) {
-            /*
-             * Each one in its own transaction, inside the service. One proposal that
-             * fails to apply must not roll back the others, because they are unrelated
-             * and every one left pending is another seller still blocked.
-             */
-            $resolved = $resolution->resolveIfReady($proposal, windowHasClosed: true);
+        /*
+         * Called through the container rather than dispatched.
+         *
+         * `dispatch_sync` looks like the right thing and is not: it hands the job to the
+         * sync queue connection, which serialises it and runs a copy, so everything the
+         * run recorded about itself is lost with that copy. Calling `handle` through the
+         * container resolves its dependencies exactly as a worker would and leaves the
+         * results on the instance, which is what this command exists to print.
+         */
+        $this->laravel->call([$job, 'handle']);
 
-            $this->line("Proposal {$resolved->id}: {$resolved->status} ({$resolved->resolution_reason})");
+        foreach ($job->resolutions as $line) {
+            $this->line($line);
         }
 
-        $this->info($expired->isEmpty()
+        $this->info($job->resolutions === []
             ? 'No review windows had closed.'
-            : "Resolved {$expired->count()} proposal(s).");
+            : 'Resolved '.count($job->resolutions).' proposal(s).');
 
         return self::SUCCESS;
     }

@@ -1,6 +1,6 @@
 # API Contract
 
-**Contract version:** 8
+**Contract version:** 9
 **Owner:** the backend repository
 **Status:** authoritative
 
@@ -322,9 +322,31 @@ Grouped by the milestone that ships them. The backend ships a milestone's endpoi
 
 | EP | Method and path | Access |
 |---|---|---|
-| EP-51 | `POST /api/internal/revalidate` | Shared secret header |
+| EP-51 | `POST /api/revalidate` | Shared secret header |
 
 EP-51 is the odd one out. It is **hosted by the frontend** as a Next.js route handler and **called by the backend** from a queued job whenever a product version is created. It authenticates with an `x-revalidate-secret` header, not a bearer token.
+
+The path is on the frontend origin, not this API. With the client at `http://localhost:3000` the full URL is `http://localhost:3000/api/revalidate`.
+
+**Request.** The header carries the shared secret. The body carries the slug and nothing else, because the handler derives both paths it rebuilds from the slug.
+
+```
+x-revalidate-secret: <the shared secret>
+```
+
+```json
+{ "slug": "vertex-one-smartphone" }
+```
+
+**Response.** 200 on success, in the ordinary envelope.
+
+```json
+{ "data": { "revalidated": true, "slug": "vertex-one-smartphone" } }
+```
+
+**Refusals.** 401 `unauthenticated` when the header is absent or does not match. 422 `validation_failed` when the body carries no slug. 500 `misconfigured` when the client itself holds no secret to compare against, which is a deployment fault rather than a caller fault and is why it is not a 401.
+
+**What fires it.** A product version, and nothing else. A rejected proposal, a failed proposal, a price edit, a wishlist change, and a page view all fire nothing, because none of them writes a version. The backend dispatches it after the transaction commits, so a slow or unreachable client never fails the request that created the version, and a version that rolls back never triggers a rebuild.
 
 ---
 
@@ -989,4 +1011,5 @@ The file is removed from storage as well as the row. It is keyed by product **sl
 | 5 | 2026-08-27 | M8. Added section 11.9, the attachment update request and response, the detach response carrying `store_is_live`, the wishlist item, and the wishlist add request. EP-36 paginates per section 2. Recorded that a repeated wishlist add answers the existing item rather than failing. No existing shape changed |
 | 6 | 2026-08-27 | M9. Added section 11.10, the community post, the post creation request, and the three verification shapes. EP-31 and EP-57 use cursor pagination per section 2. Clarified that a wishlist item's `lowest_price_minor` and `currency` are null together when nobody carries the variant, closing the M8 open request. `verification_result` and the `not_verified` and `attempts_exhausted` codes were already registered and are unchanged |
 | 7 | 2026-08-28 | M10. Added section 11.11, the view recording request and response, the seller analytics shape, and the two version history shapes. EP-46 paginates per section 2. Recorded in section 9 that EP-52 shares the public catalogue limiter. No new error codes: `not_attached` and `store_required` were registered in section 7 since version 1 and are reachable from the version endpoints for the first time now. No existing shape changed |
+| 9 | 2026-08-28 | M12. **Corrected EP-51's path from `/api/internal/revalidate` to `/api/revalidate`.** The table was the only place the `internal` segment ever appeared: the frontend build plan specifies `app/api/revalidate/route.ts`, the client has hosted the handler there since M0, and M0's own verification step calls `/api/revalidate`. The contract was describing a path nothing had ever served. Added the request, response, and refusal shapes for EP-51, and recorded that a version creation is the only event that fires it. No other shape changed, and no new error code: `unauthenticated` and `validation_failed` have been registered in section 7 since version 1 |
 | 8 | 2026-08-28 | M11. Added section 11.12, the administrator proposal list and detail, the resolve and override request and shared response, the direct edit request, the post and image deletion responses, the metrics shape, and the two administrator product shapes. EP-40, EP-58, and EP-60 paginate per section 2. Registered `proposal_not_escalated` and `proposal_not_resolved` in section 7. Recorded that an administrator resolving an escalation writes an ordinary proposal version attributed to the proposing store, that reversing an approval writes a further version and removes nothing, and that EP-59 names the proposing store where EP-29 hides it. No existing shape changed |

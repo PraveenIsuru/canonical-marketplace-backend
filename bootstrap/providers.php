@@ -3,6 +3,7 @@
 use App\Providers\AiServiceProvider;
 use App\Providers\AppServiceProvider;
 use App\Providers\FortifyServiceProvider;
+use App\Providers\HorizonServiceProvider;
 use App\Providers\RateLimitServiceProvider;
 
 return [
@@ -10,4 +11,5 @@ return [
     FortifyServiceProvider::class,
     RateLimitServiceProvider::class,
     AiServiceProvider::class,
+    HorizonServiceProvider::class,
 ];

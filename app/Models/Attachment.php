@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Concerns\InvalidatesCatalogueCache;
 use App\Jobs\NotifyNearbyAvailability;
 use Database\Factories\AttachmentFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -24,7 +25,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class Attachment extends Model
 {
     /** @use HasFactory<AttachmentFactory> */
-    use HasFactory;
+    use HasFactory, InvalidatesCatalogueCache;
 
     protected $fillable = [
         'store_id',
@@ -56,6 +57,7 @@ class Attachment extends Model
     {
         static::created(function (self $attachment): void {
             $attachment->store?->recomputeLiveFlag();
+            self::forgetCachedCatalogue($attachment);
 
             /*
              * M8. Every path that creates an attachment is a shop starting to stock
@@ -71,7 +73,34 @@ class Attachment extends Model
             NotifyNearbyAvailability::dispatch($attachment->id)->afterCommit();
         });
 
-        static::deleted(fn (self $attachment) => $attachment->store?->recomputeLiveFlag());
+        /*
+         * A price or availability edit changes the lowest price on the product page, on
+         * the variant list, and on the store's own page, so an update invalidates
+         * exactly what a creation does. It does not touch the live flag: the row still
+         * exists, so the shelf is still stocked.
+         */
+        static::updated(fn (self $attachment) => self::forgetCachedCatalogue($attachment));
+
+        static::deleted(function (self $attachment): void {
+            $attachment->store?->recomputeLiveFlag();
+            self::forgetCachedCatalogue($attachment);
+        });
+    }
+
+    /**
+     * The reads an attachment write makes wrong.
+     *
+     * Three of them, and it is worth naming why each one. The **product** carries a
+     * seller count and its variants carry a lowest price. The **store** page lists what
+     * it stocks and at what price. The **catalogue listing** shows both figures for the
+     * product in a row of its own, and that one goes with the product.
+     */
+    private static function forgetCachedCatalogue(self $attachment): void
+    {
+        $cache = self::catalogueCache();
+
+        $cache->forgetProduct($attachment->product_id);
+        $cache->forgetStore($attachment->store_id);
     }
 
     /** @return BelongsTo<Store, $this> */

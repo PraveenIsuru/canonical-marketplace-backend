@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Concerns\InvalidatesCatalogueCache;
 use Database\Factories\ProductImageFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -23,7 +24,17 @@ use Illuminate\Support\Facades\Storage;
 class ProductImage extends Model
 {
     /** @use HasFactory<ProductImageFactory> */
-    use HasFactory;
+    use HasFactory, InvalidatesCatalogueCache;
+
+    /**
+     * Images are part of both the product payload and its row in the catalogue listing,
+     * so adding or removing one invalidates the same reads a record edit does.
+     */
+    protected static function booted(): void
+    {
+        static::saved(fn (self $image) => self::catalogueCache()->forgetProduct($image->product_id));
+        static::deleted(fn (self $image) => self::catalogueCache()->forgetProduct($image->product_id));
+    }
 
     public $timestamps = false;
 

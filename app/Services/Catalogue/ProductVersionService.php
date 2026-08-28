@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Catalogue;
 
+use App\Jobs\RevalidateProductPage;
 use App\Models\Product;
 use App\Models\ProductVersion;
 use App\Models\Store;
@@ -24,6 +25,8 @@ use App\Models\User;
  */
 final class ProductVersionService
 {
+    public function __construct(private readonly CatalogueCache $cache) {}
+
     /**
      * Records a new version and points the product at it.
      *
@@ -52,6 +55,28 @@ final class ProductVersionService
         ]);
 
         $product->forceFill(['current_version_id' => $version->id])->save();
+
+        /*
+         * EP-51, and the only place it is dispatched from.
+         *
+         * A version is exactly the set of events that change what a product page says,
+         * so dispatching here rather than from each resolution path is what makes
+         * "revalidation fires on version creation and nothing else" a property of the
+         * code rather than a rule four callers have to remember. A rejected proposal
+         * writes no version, so it reaches nothing here to fire.
+         *
+         * `afterCommit` because every caller runs inside a transaction. A version that
+         * rolls back must not have already told the client to rebuild the page around
+         * it.
+         */
+        RevalidateProductPage::dispatch($product->slug)->afterCommit();
+
+        /*
+         * The cached catalogue reads for this product are now answering from a record
+         * that has changed. Invalidated here for the same reason the dispatch is here:
+         * one place, tied to the event that makes the cache wrong.
+         */
+        $this->cache->forgetProduct($product);
 
         return $version;
     }

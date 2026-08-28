@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Concerns\InvalidatesCatalogueCache;
 use Database\Factories\ProductFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -42,7 +43,20 @@ use Laravel\Scout\Searchable;
 class Product extends Model
 {
     /** @use HasFactory<ProductFactory> */
-    use HasFactory, Searchable;
+    use HasFactory, InvalidatesCatalogueCache, Searchable;
+
+    /**
+     * Any write to the record makes every cached read of it wrong.
+     *
+     * Broad on purpose. The alternative is listing which columns appear in which
+     * response, which is a list that goes out of date the first time a resource gains a
+     * field. Rebuilding a product page that did not strictly need rebuilding costs one
+     * query; serving a stale name costs a buyer the wrong information.
+     */
+    protected static function booted(): void
+    {
+        static::saved(fn (self $product) => self::catalogueCache()->forgetProduct($product));
+    }
 
     protected $fillable = [
         'name',

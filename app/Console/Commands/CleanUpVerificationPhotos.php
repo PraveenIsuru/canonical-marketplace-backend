@@ -4,23 +4,19 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
-use App\Services\Community\VerificationService;
+use App\Jobs\DeleteOrphanedVerificationPhotographs;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Storage;
 
 /**
- * Destroys verification photographs nothing is coming back for.
+ * Runs the verification photograph sweep here and now.
  *
- * A safety net, not the primary mechanism. Photographs are deleted the moment
- * verification concludes, on a pass and on a failure alike, and the queued job deletes
- * them too when the provider never recovers. This exists for the case none of those
- * cover: a worker killed mid job, a queue drained without running, a crash between the
- * upload and the judgement.
+ * The work lives in [DeleteOrphanedVerificationPhotographs]. This command exists so the
+ * sweep can be run on demand with a different age threshold, which is what somebody
+ * does when they have found a stray photograph and want it gone rather than waiting for
+ * tonight's run.
  *
- * The invariant is not "we usually delete verification photographs". It is that a
- * photograph is deleted once verification concludes, and a photograph whose
- * verification can never conclude has concluded in the only sense that matters here.
- * This is what makes that true even when a process dies at the wrong moment.
+ * The schedule dispatches the job instead, so the routine path is queued and visible in
+ * Horizon and the manual path is immediate. Both run the same code.
  */
 final class CleanUpVerificationPhotos extends Command
 {
@@ -28,37 +24,24 @@ final class CleanUpVerificationPhotos extends Command
 
     protected $description = 'Delete verification photographs left behind by interrupted work';
 
-    public function handle(VerificationService $verification): int
+    public function handle(): int
     {
-        $hours = max(1, (int) $this->option('hours'));
-        $cutoff = now()->subHours($hours)->getTimestamp();
+        $job = new DeleteOrphanedVerificationPhotographs((int) $this->option('hours'));
 
-        $disk = (string) config('filesystems.verification_photos', 'verification_photos');
-        $storage = Storage::disk($disk);
+        /*
+         * Called through the container rather than dispatched.
+         *
+         * `dispatch_sync` looks like the right thing and is not: it hands the job to the
+         * sync queue connection, which serialises it and runs a copy, so everything the
+         * run recorded about itself is lost with that copy. Calling `handle` through the
+         * container resolves its dependencies exactly as a worker would and leaves the
+         * results on the instance, which is what this command exists to print.
+         */
+        $this->laravel->call([$job, 'handle']);
 
-        $removed = 0;
-
-        foreach ($storage->allFiles('attempts') as $path) {
-            /*
-             * Age is read from the file rather than from any row, deliberately. The row
-             * does not know the path, which is the whole design, so the file's own
-             * modification time is the only thing that can decide this.
-             *
-             * The window is generous because a photograph still being judged must not be
-             * pulled out from under a running job. Six hours is far beyond any provider
-             * call and far short of leaving one lying about.
-             */
-            if ($storage->lastModified($path) > $cutoff) {
-                continue;
-            }
-
-            $verification->deletePhoto($path);
-            $removed++;
-        }
-
-        $this->info($removed === 0
+        $this->info($job->removed === 0
             ? 'No verification photographs needed removing.'
-            : "Removed {$removed} verification photograph(s) left behind by interrupted work.");
+            : "Removed {$job->removed} verification photograph(s) left behind by interrupted work.");
 
         return self::SUCCESS;
     }
