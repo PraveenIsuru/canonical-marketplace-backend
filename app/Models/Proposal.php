@@ -40,6 +40,9 @@ use Illuminate\Support\Carbon;
  * @property int|null $intended_price_minor
  * @property string|null $intended_currency
  * @property int|null $votes_count
+ * @property int|null $votes_in_favour_count
+ * @property int|null $votes_against_count
+ * @property int|null $resolved_by_user_id
  * @property int|null $reviewers_count
  */
 class Proposal extends Model
@@ -136,6 +139,21 @@ class Proposal extends Model
     public function votes(): HasMany
     {
         return $this->hasMany(ProposalVote::class);
+    }
+
+    /**
+     * The administrator who settled this, and null until one has.
+     *
+     * Set by EP-41 and EP-42 at M11 and by nothing else, because the matrix and the
+     * sweep resolve proposals without a person involved. Named to other administrators
+     * only: no seller facing response carries it, and no version names the
+     * administrator who caused it either.
+     *
+     * @return BelongsTo<User, $this>
+     */
+    public function resolvedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'resolved_by_user_id');
     }
 
     /**

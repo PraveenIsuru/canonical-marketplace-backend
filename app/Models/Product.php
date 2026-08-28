@@ -99,6 +99,20 @@ class Product extends Model
         return $this->hasMany(Attachment::class);
     }
 
+    /**
+     * Every proposal ever raised against this record.
+     *
+     * Used by the administrator catalogue to answer whether a seller is currently
+     * blocked on this product. No seller facing read goes through here: a seller sees
+     * their own proposals through ProposalsQuery, scoped to their store.
+     *
+     * @return HasMany<Proposal, $this>
+     */
+    public function proposals(): HasMany
+    {
+        return $this->hasMany(Proposal::class);
+    }
+
     /** @return HasMany<ProductVersion, $this> */
     public function versions(): HasMany
     {

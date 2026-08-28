@@ -115,6 +115,31 @@ class ApiException extends RuntimeException
         );
     }
 
+    /**
+     * EP-41 was called on a proposal that is not escalated.
+     *
+     * Most often the ordinary race of two administrators working the same queue, so
+     * the message points at a refresh rather than at a fault.
+     */
+    public static function proposalNotEscalated(): self
+    {
+        return new self(
+            409,
+            'proposal_not_escalated',
+            'Only an escalated proposal can be resolved by an administrator. This one is not.',
+        );
+    }
+
+    /** EP-42 was called on a proposal that nobody has decided yet. */
+    public static function proposalNotResolved(): self
+    {
+        return new self(
+            409,
+            'proposal_not_resolved',
+            'Only a proposal that has already been approved or rejected can be overridden.',
+        );
+    }
+
     public static function notAttached(): self
     {
         return new self(

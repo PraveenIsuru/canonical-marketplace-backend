@@ -32,7 +32,7 @@ Update the two status columns as milestones complete. Everything else in this fi
 | M8 Listings and wishlist | Done | Done |
 | M9 Community and verification | Done | Done |
 | M10 Analytics and versions | Done | Done |
-| M11 Administration | Not started | Not started |
+| M11 Administration | Done | Not started |
 | M12 Caching and revalidation | Not started | Not started |
 
 Values: `Not started`, `In progress`, `Done`.
@@ -1367,6 +1367,88 @@ Unrelated but noticed while checking: the product route reports a 30 second reva
 
 ---
 
+### M11 Administration, backend, 2026-08-28
+
+**Shipped.**
+- EP-40 `GET /api/admin/escalations`, EP-58 `GET /api/admin/proposals`, EP-59 `GET /api/admin/proposals/{id}`
+- EP-41 `POST /api/admin/proposals/{id}/resolve`, EP-42 `POST /api/admin/proposals/{id}/override`
+- EP-60 `GET /api/admin/products`, EP-61 `GET /api/admin/products/{id}`, EP-43 `PATCH /api/admin/products/{id}`
+- EP-44 `DELETE /api/admin/community/posts/{id}`, EP-45 `GET /api/admin/metrics`
+- EP-49 `DELETE /api/products/{slug}/images/{id}`, admin gated but outside the admin prefix
+- `AdminProposalService` with an `AdminDecision` value object, `AdminProductService`, `AdminModerationService`
+- `AdminProposalsQuery`, `AdminProductsQuery`, `PlatformMetricsQuery`, four resources, two form requests
+- `AttributeService`, extracted so option widening has one implementation
+- An escalated proposal in the seeder, blocking a seller for nine days
+
+**Contract.**
+- Contract version at time of writing: **bumped from 7 to 8**
+- Changes made to api-contract.md: added **section 11.12**, the administrator proposal list and detail, the resolve and override request and shared response, the direct edit request, the post and image deletion responses, the metrics shape, and the two administrator product shapes
+- Error codes now live from this milestone: **`proposal_not_escalated`** and **`proposal_not_resolved`**, both new and both registered in section 7 before any code returned them
+
+**The open request from M7 is closed.**
+
+*"Nothing resolves an escalated proposal. A seller whose proposal escalates stays blocked with no route out."* Raised at M7 and open for four milestones. EP-41 is the route out, and it is the only one: nothing else in the platform can unblock a seller whose proposal escalated.
+
+**No migration was needed, and that is the fourth time M0 paid off.** `proposals.resolved_by_user_id` was created at M0 and had sat unused ever since, waiting for exactly this.
+
+**Deviations from the plan.**
+
+- **An administrator resolving an escalation writes an ordinary proposal version, not an administrator one.** `caused_by_store` names the proposing store and `is_admin_originated` stays false. The change is the seller's; the administrator only decided it. Flagging it as an administrator edit would null the store and erase the seller who actually proposed it, and section 11.11 already promises sellers that `caused_by_store` names whoever's proposal produced a version.
+- **`resolution_reason` is never overwritten by an administrator decision.** It stays `tie_no_majority` or `no_votes_cast`, and the administrator goes in `resolved_by_user_id`. The reason records *why this escalated* and the administrator records *who settled it*: those are two facts, and overwriting one with the other would trade a fact for a fact rather than adding one. A resolved escalation therefore reads as "approved, after escalating on a tie, by administrator X".
+- **EP-41 accepts no free text reason.** `resolution_reason` is a coded audit vocabulary the system can query, and prose in that column would destroy it. If a note is wanted later it needs a column of its own, not this one.
+- **Reversing an approval never removes an attribute option or a combination.** Invariant 2 forbids removing a combination, by anyone, an administrator included, so a reversal restores scalar fields and specifications and leaves any options the approval added in place. A reversal that stranded generated combinations could never be cleaned up afterwards, which would make the reversal worse than the thing it undid.
+- **Reversing an approval leaves the proposing seller's attachment alone.** Reversing a claim about what a product *is* says nothing about whether that shop stocks it, and "nothing is deleted or rolled back" points the same way.
+- **A specification whose `from` was null is removed on reversal**, rather than restored as an empty string. The record did not hold that key before the approval invented it.
+- **A name or category with a null `from` is not restored on reversal.** Those columns are not nullable and the record has to say something, so the approved value stands. This is only reachable for a proposal that invented a field the record never had, which the wizard does not produce.
+- **EP-42 on a proposal that already holds the requested outcome is allowed and is a no op in everything but the audit trail.** It records that an administrator looked and let the decision stand, which is worth more than a refusal that leaves no trace of the review. No second version and no duplicate attachment.
+- **EP-43 widens existing attributes only. Naming an attribute the record does not define is refused with `validation_failed`.** Adding a new dimension to a record that already has combinations would leave every one of them with no value for it, permanently, since nothing can remove a combination. The build plan's stated test is about adding an *option*, and that is what shipped. **This is raised as an open request below** rather than treated as settled.
+- **EP-43 does not accept `slug`.** It is the record's public address, every static page and inbound link is keyed by it, and a rename would break all of them for a cosmetic gain. It is absent from the rules rather than validated and ignored, so a client that sends one finds out.
+- **EP-43 does not accept `variants` either**, and that absence is invariant 2. Accepting the array would be the shape a future mistake needed.
+- **EP-43 replaces `specifications` wholesale**, so a key left out is removed. A specification has nothing generated from it, which is exactly why it can be removed where an attribute option cannot.
+- **EP-59 names the proposing store, where EP-29 hides it.** A reviewer judging a claim should not know which competitor made it; an administrator settling an escalation cannot decide fairly without knowing who is blocked and what the votes said. The confidence score stays off both, and there is a test asserting it against all six administrator reads.
+- **EP-59 carries `intended_listing`.** No attachment row exists while a proposal blocks a seller, so an administrator should see the listing they are about to release before releasing it.
+- **A post is soft deleted; an image is destroyed.** Deliberately different. A post is somebody's words and the row survives with every read path hiding it; an image is not evidence of anything and keeping a moderated one on disk serves nobody.
+- **The administrator catalogue is keyed by id, unlike every public product route.** A slug is a public address derived from a name and could be wrong about the record. An administrator correcting that name should operate on the row, not on a string derived from the thing they are about to change. EP-49 is the exception and stays on the slug path, because it sits beside EP-48 which added the image.
+- **EP-58 ignores an unrecognised `?status=` rather than refusing it.** It can only come from a hand written URL, and the unfiltered list is a more useful answer than a validation error.
+
+**One refactor, and it was necessary rather than tidy.**
+
+`applyApproval` was private on `ProposalResolutionService`. EP-41 and EP-42 both have to cause exactly what a peer approval causes, so it is now public and returns what it did. Two implementations of "what approval means" would drift, and the drift would surface only as a seller who was unblocked and never listed. Option widening moved to a new `AttributeService` and combination regeneration to `VariantGenerationService::regenerateFor()` for the same reason: an administrator widens the same lists, and two implementations of "additive" would eventually disagree about case or whitespace. **The 41 M7 tests were run against the refactor before anything else was built**, and stayed green.
+
+**The invariants test caught the new routes, and was strengthened rather than relaxed.**
+
+Invariant 1's assertion walked every registered write route and refused any whose path mentioned `products`, `variants`, or `attributes`. EP-43 and EP-49 tripped it. The invariant is not that nothing writes to a record, it is that **no seller** does, and invariant 6 explicitly contemplates an administrator edit. So the assertion moved: any write route addressing a canonical record must now carry the `admin` middleware, which is a stronger claim than the one it replaced. A new seller route touching a record fails it, **and so does an administrator route that forgot its gate.** A seller is also refused on EP-43 by request, not merely by middleware inspection.
+
+**Known gaps handed to the other side.**
+- **Nothing blocking. S-32 to S-37 are unblocked, and S-06 gains an administrator remove.**
+- **The seeder now produces one escalated proposal**, on `meridian-14-laptop`, proposed by Northern Supplies, escalated on a **tie** with one vote each way and real comments on both. `review_opens_at` is nine days back, so the queue has something with genuine age at the top rather than a row that only looks urgent if you read the timestamp carefully. Northern Supplies holds no attachment on that product, and that absence is the block.
+- **`seller_unblocked` is true on both outcomes of EP-41, and the confirmation copy must say so.** Approval releases the listing they were waiting on; rejection releases them to try again. Copy that describes rejection as leaving a seller blocked is wrong, and this is the field to key it off.
+- **Rejection through EP-41 creates no version and no attachment**, and the record is untouched. The seller may start a fresh attempt immediately.
+- **Overriding an approval writes a *further* version.** Nothing is deleted, no version leaves the chain, and the version count goes up rather than down. A screen that describes this as "undo" or "rollback" would be describing something the platform does not do.
+- **There is no restore for a deleted post and none is planned.** Soft deletion is how the row survives, not a step towards an undelete.
+- **No response anywhere names an administrator to a seller.** `resolved_by` on EP-59 is administrator to administrator; a version never names the administrator who caused it. Do not surface an administrator identity on any seller facing screen.
+- **`has_pending_proposal` covers pending and escalated**, because both mean somebody is blocked on that record right now.
+- **`oldest_escalation_opened_at` on EP-45 is the one metric that names an obligation.** While it is set, a seller is waiting. Null when nothing is escalated.
+- **EP-45 carries nothing per user.** The closest is a count of people who have verified something, which is a number and not a list.
+- **The M9 verification limiter question is still open**, unchanged by this milestone.
+
+**Open requests raised by this milestone.**
+- **EP-43 cannot add a new attribute to a product that already has one.** Refused with `validation_failed`, because adding a dimension would leave every existing combination without a value for it and invariant 2 means those could never be cleaned up. If an administrator genuinely needs to add an attribute to a live record, it needs a design decision about what happens to the combinations generated under the old set, not a relaxed validation rule.
+
+**Verified by.**
+- 37 tests in `tests/Feature/Api/AdministrationTest.php`
+- The build plan's stated M11 list, item by item: **both escalation outcomes unblocking the proposing seller**, asserted through `isBlocking()` and through the attachment appearing on approval and staying absent on rejection; a **direct edit creating a version with `is_admin_originated` true and `caused_by_user_id` set to the acting administrator** with no causing store; an **added attribute option generating combinations additively** with the existing attachment unchanged in variant and price; **reversing an approval creating a further version** with both versions present afterwards and the record moved forward rather than back; and a **post soft deleted rather than removed**, still present through `withTrashed` and absent from the public thread with its replies gone
+- The invariants file strengthened and green: every write route touching a canonical record carries the `admin` middleware, and a seller is refused on EP-43 by request
+- A test reading the raw bodies of all six administrator reads and refusing `confidence_score`, `confidence_band`, and `created_by_store_id`. **Administrators are not an exception to section 6**
+- Walked against the live API on seeded data:
+  - **UF-35.** EP-40 returned the nine day old escalation with the proposing store named, the tie visible as one for and one against out of two, and `tie_no_majority` recorded. EP-59 showed the change comparison, both reviewer comments, and the withheld listing at 431000 LKR. Approving through EP-41 answered `seller_unblocked: true`, `attachments_created: 1`, `version_number: 2`; the proposal stopped blocking, the attachment appeared, the record read 1.24 kg, and the version was attributed to **Northern Supplies with `is_admin_originated: false`** while `resolution_reason` stayed `tie_no_majority` and `resolved_by_user_id` recorded the administrator
+  - **UF-36.** Overriding that approval answered `version_number: 3`; the chain then held **three** versions with the reversal marked administrator originated, the weight was back to 1.3 kg by moving forward, and the seller kept their listing
+  - **UF-37.** A direct edit adding a `64GB` memory option answered version 4, took the option list from three to four and the combinations from three to four, and left **all four existing attachments on their original variants at their original prices**. The version carried `is_admin_originated: true`, `caused_by_store: null`, and named no administrator in the response body
+  - EP-45 answered the platform snapshot with `oldest_escalation_opened_at` null once the queue was cleared, and EP-60 answered the edited product with its new counts
+- `composer test` green: Pint passed, PHPStan level 7 with **0 errors**, 450 tests with 445 passed and 5 todo
+
+---
+
 ## 4. Open requests
 
 Things one side needs from the other that are not yet built. Remove a row only when it has shipped and been recorded in section 3.
@@ -1380,10 +1462,12 @@ Things one side needs from the other that are not yet built. Remove a row only w
 | Backend | 2026-08-27 | EP-19 is not paginated. A store's listings are bounded in practice, but a seller carrying hundreds of products would return one large payload | Open, low priority. Revisit if it becomes a real shape rather than a hypothetical one |
 | Frontend | 2026-08-27 | **S-26 and S-27 could not be built at M6.** The build plan lists them under this milestone, but S-26 needs EP-27 and S-27 needs EP-29, both of which are M7. Building either would have meant inventing a shape the backend has not defined. They should be built alongside M7's own screens once those endpoints land, and the "still being built" copy on the S-24 outcome panel and in X-05 replaced with real links then | **Closed 2026-08-27.** Both shipped at frontend M7 against EP-27 and EP-29. S-27 shares the `/proposals/[id]` route with S-29, because EP-29 serves the proposer and the reviewers from one id. The "still being built" copy on the S-24 outcome panel and in X-05 is replaced by real links |
 
-| Backend | 2026-08-27 | **Nothing resolves an escalated proposal.** The matrix escalates on a tie, on no votes at all, and on high confidence with peers against, and EP-41 and EP-42 that act on that are M11. A seller whose proposal escalates stays blocked with no route out | Open. Not blocking the frontend, which renders escalated as a blocked state already. Blocking for the seller it happens to |
+| Backend | 2026-08-27 | **Nothing resolves an escalated proposal.** The matrix escalates on a tie, on no votes at all, and on high confidence with peers against, and EP-41 and EP-42 that act on that are M11. A seller whose proposal escalates stays blocked with no route out | **Closed 2026-08-28.** EP-41 ships at backend M11 and is the only route out: both outcomes unblock the proposing seller, and the seeder now produces an escalated proposal to demonstrate it against |
 
 | Frontend | 2026-08-27 | **Section 11.9 does not state that a wishlist item's `currency` is nullable.** The example shows a populated pair, and the API returns `lowest_price_minor: null` and `currency: null` together when nobody carries the variant, which the same section describes in prose. The frontend schema mirrors the API. Worth writing the null case into the example or a sentence so the next client does not refuse it | **Closed 2026-08-27.** Contract version 6 states it in section 11.9: `lowest_price_minor` and `currency` are always null together and never one without the other |
 
 | Frontend | 2026-08-27 | **The 5 per minute `verification` limiter and the five attempt ceiling interact.** Each attempt costs two requests (start plus submit), so a buyer working through all five in one sitting trips `rate_limited` after roughly two and a half. Both limits are correct in isolation. Worth deciding whether the limiter should be widened, or whether S-15 should explain the pause | Open. Not blocking: the ceiling is enforced correctly and the refusal is a registered code the client already handles |
+
+| Backend | 2026-08-28 | **EP-43 cannot add a new attribute to a product that already defines one.** Options can be added to an existing attribute, but naming a new one is refused, because every combination generated under the old attribute set would be left without a value for it and invariant 2 means those could never be cleaned up. Needs a design decision about what happens to those combinations, not a relaxed validation rule | Open. Not blocking: the milestone's stated requirement is adding an option, which works |
 
 Use this table rather than guessing. A frontend screen that needs a field the contract does not define adds a row here. It does not invent a field name and hope.

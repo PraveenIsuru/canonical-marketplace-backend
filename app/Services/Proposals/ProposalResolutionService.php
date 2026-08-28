@@ -13,6 +13,7 @@ use App\Models\Proposal;
 use App\Models\ProposalVote;
 use App\Models\Store;
 use App\Models\Variant;
+use App\Services\Catalogue\AttributeService;
 use App\Services\Catalogue\ProductVersionService;
 use App\Services\Catalogue\VariantGenerationService;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -42,6 +43,7 @@ final class ProposalResolutionService
         private readonly ResolutionMatrix $matrix,
         private readonly ProductVersionService $versions,
         private readonly VariantGenerationService $variants,
+        private readonly AttributeService $attributes,
     ) {}
 
     /**
@@ -105,27 +107,41 @@ final class ProposalResolutionService
      * Order matters. The changes are applied first so the version snapshot describes
      * the record as it now is, then the attachment is released, then the store's
      * visibility is recomputed from its new attachment count.
+     *
+     * Public because M11 calls it too. An administrator resolving an escalation in the
+     * seller's favour, and an administrator overriding a rejection into an approval,
+     * must cause exactly what a peer approval causes. Two implementations of what
+     * approval means would drift, and the drift would surface only as a seller who was
+     * unblocked and never listed.
      */
-    private function applyApproval(Proposal $proposal): void
+    public function applyApproval(Proposal $proposal): ApprovalEffects
     {
         $product = $proposal->product;
 
         $this->applyChanges($product, $proposal->changes);
 
-        // A version exists for an accepted proposal and an administrator edit, and for
-        // nothing else. A rejected proposal never reaches here.
-        $this->versions->record(
+        /*
+         * A version exists for an accepted proposal and an administrator edit, and for
+         * nothing else. A rejected proposal never reaches here.
+         *
+         * Attributed to the **proposing store**, including when an administrator is the
+         * one who accepted it at M11. The change is the seller's, and whoever decided it
+         * is recorded on the proposal instead.
+         */
+        $version = $this->versions->record(
             $product->refresh(),
             causedByStore: $proposal->store,
             causedByUser: $proposal->store?->user,
             proposalId: $proposal->id,
         );
 
-        $this->releaseAttachment($proposal);
+        $attachmentsCreated = $this->releaseAttachment($proposal);
 
         // Dispatched after the surrounding transaction commits, so the index never
         // advertises a record that then rolled back.
         DB::afterCommit(fn () => IndexProduct::dispatch($product->id));
+
+        return new ApprovalEffects($version->version_number, $attachmentsCreated);
     }
 
     /**
@@ -174,59 +190,27 @@ final class ProposalResolutionService
     }
 
     /**
-     * Widens an attribute's option list.
+     * Widens an attribute's option list from what the seller typed.
      *
-     * **Additive only.** Options present on the record are kept even when the seller
-     * did not list them, because a combination generated from an option is permanent,
-     * and removing the option would leave combinations referring to a value the record
-     * no longer claims to have.
-     *
-     * So a seller proposing "Black, Sand" against a record holding "Black, Grey" adds
-     * Sand and keeps Grey. They have told us about a version we did not know about,
-     * not told us the one we knew about stopped existing.
+     * The merge itself lives in AttributeService, because an administrator widens the
+     * same lists at M11 and two implementations of additive would eventually disagree
+     * about case or whitespace. All this does is turn the proposal's comma separated
+     * string into the list that service takes.
      */
     private function applyAttributeOptions(ProductAttribute $definition, string $proposed): void
     {
-        $submitted = array_values(array_filter(array_map(
-            static fn (string $option): string => trim($option),
-            explode(',', $proposed),
-        )));
-
-        $existing = $definition->options;
-        $merged = $existing;
-
-        foreach ($submitted as $option) {
-            $alreadyPresent = array_filter(
-                $existing,
-                static fn (string $current): bool => mb_strtolower($current) === mb_strtolower($option),
-            );
-
-            if ($alreadyPresent === []) {
-                $merged[] = $option;
-            }
-        }
-
-        $definition->options = array_values($merged);
-        $definition->save();
+        $this->attributes->widen($definition, $this->attributes->parseOptionList($proposed));
     }
 
     /**
      * Generates any combinations the widened attributes now make possible.
      *
-     * Additive, and it leaves every existing combination and every existing attachment
-     * untouched. A seller carrying "Black, Medium" keeps carrying exactly that when a
-     * new colour appears.
+     * Delegated for the same reason the widening is. An administrator edit needs the
+     * identical step, and the order combinations come out in decides how they display.
      */
     private function regenerateCombinations(Product $product): void
     {
-        $attributes = $product->productAttributes()->orderBy('position')->get()
-            ->map(static fn (ProductAttribute $attribute): array => [
-                'name' => $attribute->name,
-                'options' => $attribute->options,
-            ])
-            ->all();
-
-        $this->variants->generateFor($product, $this->variants->combinations($attributes));
+        $this->variants->regenerateFor($product);
     }
 
     /**
@@ -236,7 +220,7 @@ final class ProposalResolutionService
      * was pending, and that absence is what stopped the seller selling; approval is
      * where it is finally created, from the listing recorded when they submitted.
      */
-    private function releaseAttachment(Proposal $proposal): void
+    private function releaseAttachment(Proposal $proposal): int
     {
         $variantIds = $proposal->intended_variant_ids ?? [];
         $store = $proposal->store;
@@ -251,7 +235,7 @@ final class ProposalResolutionService
                 'proposal_id' => $proposal->id,
             ]);
 
-            return;
+            return 0;
         }
 
         $variants = Variant::query()
@@ -259,8 +243,10 @@ final class ProposalResolutionService
             ->whereIn('id', $variantIds)
             ->get();
 
+        $created = 0;
+
         foreach ($variants as $variant) {
-            Attachment::firstOrCreate(
+            $attachment = Attachment::firstOrCreate(
                 ['store_id' => $store->id, 'variant_id' => $variant->id],
                 [
                     'product_id' => $proposal->product_id,
@@ -269,11 +255,17 @@ final class ProposalResolutionService
                     'is_available' => true,
                 ],
             );
+
+            if ($attachment->wasRecentlyCreated) {
+                $created++;
+            }
         }
 
         // The model recomputes this on create, so this covers the case where every
         // intended attachment already existed and no create fired.
         $store->recomputeLiveFlag();
+
+        return $created;
     }
 
     /**

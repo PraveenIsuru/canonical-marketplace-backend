@@ -9,6 +9,7 @@ use App\Models\Product;
 use App\Models\ProductImage;
 use App\Models\User;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 
 /**
  * Images belonging to a canonical product record.
@@ -54,6 +55,31 @@ final class ProductImageService
             'uploaded_by_user_id' => $uploader->id,
             'position' => $position ?? $this->nextPosition($product),
         ]);
+    }
+
+    /**
+     * EP-49 Removes an image, row and file.
+     *
+     * The only deletion path for an image, and it is administrator only. A seller may
+     * add one through EP-48 and may never remove one, because an uploader who could
+     * remove an image could remove one a later seller relies on. Images belong to the
+     * shared record, not to whoever happened to upload them.
+     *
+     * Actually destroyed rather than soft deleted, unlike a community post. An image is
+     * not evidence of anything, and keeping a moderated one on disk serves nobody.
+     *
+     * Deletion is tolerant of a file that has already gone. The goal is that it is not
+     * there, and it already not being there satisfies that.
+     *
+     * @return int how many images the record has left
+     */
+    public function remove(Product $product, ProductImage $image): int
+    {
+        Storage::disk($this->disk())->delete($image->storage_path);
+
+        $image->delete();
+
+        return $product->images()->count();
     }
 
     /**

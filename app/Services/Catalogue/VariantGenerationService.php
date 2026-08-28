@@ -57,6 +57,32 @@ final class VariantGenerationService
     }
 
     /**
+     * Regenerates a product's combinations from whatever its attributes now say.
+     *
+     * The one entry point for "an attribute changed, catch the variants up", used by an
+     * approved proposal and by an administrator edit. Both widen attributes and both
+     * need exactly this afterwards, and two copies of it would eventually differ about
+     * ordering, which decides how combinations are displayed.
+     *
+     * Additive, like everything else here. Every existing combination and every
+     * existing attachment survives untouched: a shop carrying Black keeps carrying
+     * Black when a new colour appears.
+     *
+     * @return Collection<int, Variant> every combination of the product, new and existing
+     */
+    public function regenerateFor(Product $product): Collection
+    {
+        $attributes = $product->productAttributes()->orderBy('position')->get()
+            ->map(static fn ($attribute): array => [
+                'name' => $attribute->name,
+                'options' => $attribute->options,
+            ])
+            ->all();
+
+        return $this->generateFor($product, $this->combinations($attributes));
+    }
+
+    /**
      * Writes the combinations that do not exist yet, and leaves the rest alone.
      *
      * Existing rows are matched by hash rather than by content, so a combination whose

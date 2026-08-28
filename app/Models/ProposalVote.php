@@ -6,6 +6,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Carbon;
 
 /**
  * One reviewer's vote on one proposal.
@@ -18,11 +19,15 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * excluded from the denominator. That is why abstention is not stored as a third vote
  * value: it is not a position, it is the lack of one.
  *
+ * created_at is set by the database on insert and has no updated_at partner, because a
+ * vote is written once and never revised.
+ *
  * @property int $id
  * @property int $proposal_id
  * @property int $store_id
  * @property bool $vote true is in favour
  * @property string|null $comment
+ * @property Carbon $created_at
  */
 class ProposalVote extends Model
 {

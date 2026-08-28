@@ -1,6 +1,6 @@
 # API Contract
 
-**Contract version:** 7
+**Contract version:** 8
 **Owner:** the backend repository
 **Status:** authoritative
 
@@ -133,6 +133,8 @@ Every code the API can return. **Add a row here before returning a new code from
 | `already_voted` | 409 | This store already voted on this proposal |
 | `review_closed` | 409 | The three day review window has closed |
 | `not_eligible_to_vote` | 403 | Store was not attached when the proposal opened |
+| `proposal_not_escalated` | 409 | Administrator resolution attempted on a proposal that is not escalated |
+| `proposal_not_resolved` | 409 | Administrator override attempted on a proposal that has not resolved yet |
 | `not_attached` | 403 | Version history requested by a seller not carrying this product |
 | `not_verified` | 403 | Community post attempted without verified ownership of that product |
 | `attempts_exhausted` | 403 | Five verification attempts used for this product |
@@ -745,6 +747,235 @@ The snapshot is the **complete record state at that version**, not a diff, so re
 
 **Holding a store is not enough.** A seller who carries forty other products still gets `not_attached` on the one they do not, because the history is a working document for the sellers responsible for that record rather than a catalogue wide privilege. A seller who detaches loses access on their **next request**, mid session, with no grace period.
 
+### 11.12 Administration
+
+The administrator surface exists for one reason above all others: **a proposal that escalates blocks the seller who wrote it, and nothing else in the platform can unblock them.** Everything else here is secondary to that.
+
+Administrators are a flag on a user, not a separate identity. There is no administrator account type, no roles array, and an administrator holds a wishlist and may run a store like anybody else.
+
+**Nothing here exposes a confidence score or band**, at any access level, including to an administrator resolving an escalation. Section 6 has no exceptions and this is not one. An administrator deciding a disagreement between a seller and the incumbents should decide it on the evidence in front of them, and the AI's number would anchor that decision exactly as it would anchor a reviewer's vote.
+
+**The proposal list item**, returned by EP-40 and EP-58. Both paginate per section 2.
+
+```json
+{
+  "id": 77,
+  "status": "escalated",
+  "resolution_reason": "tie_no_majority",
+  "review_opens_at": "2026-08-20T09:00:00Z",
+  "review_closes_at": "2026-08-23T09:00:00Z",
+  "resolved_at": "2026-08-23T09:05:00Z",
+  "changed_fields": ["Battery"],
+  "product": { "id": 12, "slug": "vertex-one-smartphone", "name": "Vertex One Smartphone" },
+  "store": { "id": 4, "name": "Colombo Audio" },
+  "votes_cast": 2,
+  "votes_in_favour": 1,
+  "votes_against": 1,
+  "reviewer_count": 3
+}
+```
+
+**This names the proposing store, where EP-29 does not.** The asymmetry is deliberate. A reviewer is asked to judge whether a claim about a product is right, and telling them which competitor made it invites voting on the seller instead. An administrator settling an escalation is doing the opposite job: they need to know who is blocked, for how long, and what the reviewers actually said.
+
+`resolution_reason` is the coded reason the matrix recorded: `high_confidence_peers_favour`, `high_confidence_peers_against`, `low_confidence_peers_favour`, `low_confidence_peers_against`, `no_votes_cast`, or `tie_no_majority`. It is null on a proposal still pending.
+
+`votes_in_favour` and `votes_against` are the split, which reviewers never see and an administrator always needs. They sum to `votes_cast`, and `reviewer_count` is the frozen reviewer set, so the gap between the two is the reviewers who said nothing. **Non voters are excluded rather than counted as opposed**, which is why a proposal can be approved on one vote out of five.
+
+**EP-40 returns escalated proposals only, oldest first**, ordered by `review_opens_at` ascending. That order is the queue's whole purpose: the row at the top is the seller who has been blocked longest. **EP-58 returns every proposal**, newest first, and accepts `?status=` with one of `pending`, `approved`, `rejected`, `escalated`.
+
+**The proposal detail**, returned by EP-59. The list item plus the three things a decision needs.
+
+```json
+{
+  "id": 77,
+  "status": "escalated",
+  "resolution_reason": "tie_no_majority",
+  "review_opens_at": "2026-08-20T09:00:00Z",
+  "review_closes_at": "2026-08-23T09:00:00Z",
+  "resolved_at": "2026-08-23T09:05:00Z",
+  "product": { "id": 12, "slug": "vertex-one-smartphone", "name": "Vertex One Smartphone" },
+  "store": { "id": 4, "name": "Colombo Audio" },
+  "changes": [{ "attribute": "Battery", "from": "4500 mAh", "to": "5200 mAh" }],
+  "votes": [
+    {
+      "store": { "id": 5, "name": "Pettah Gadgets" },
+      "vote": "approve",
+      "comment": "Mine says 5200 mAh on the cell itself.",
+      "cast_at": "2026-08-21T11:00:00Z"
+    }
+  ],
+  "intended_listing": { "variant_ids": [55], "price_minor": 429900, "currency": "LKR" },
+  "votes_cast": 2,
+  "votes_in_favour": 1,
+  "votes_against": 1,
+  "reviewer_count": 3,
+  "resolved_by": { "id": 2, "name": "A. Administrator" }
+}
+```
+
+`changes` is an array in review order, exactly as section 11.8 describes it, and `from` is null where the record held nothing.
+
+`votes` carries each reviewer's comment, which is the most useful thing on the screen: the comments are the argument the administrator is being asked to settle. A reviewer who did not vote is simply absent from the array.
+
+**`intended_listing` is what approval will create.** No attachment row exists while a proposal blocks a seller, so this is the listing being withheld, and an administrator should be able to see what they are about to release before releasing it. `variant_ids` name combinations of the proposal's own product.
+
+`resolved_by` names the administrator who settled it, and is **null until one has.** Administrators are named to other administrators here and **to nobody else**, which is the same rule section 11.11 states from the other side: a version never names the administrator who caused it.
+
+**EP-41 resolves an escalation.** It is the only thing in the platform that unblocks a seller whose proposal escalated.
+
+```json
+{ "decision": "approve" }
+```
+
+`decision` is `approve` or `reject` and is required. Nothing else is accepted: a proposal is taken or left **as a whole**, per invariant 4, so there is no per field decision here and no endpoint accepts one.
+
+Refused with **409 `proposal_not_escalated`** when the proposal is in any other state, which includes the ordinary race of two administrators working the same queue.
+
+**EP-42 overrides a proposal that has already resolved**, reversing what the peers or the matrix decided.
+
+```json
+{ "decision": "reject" }
+```
+
+Refused with **409 `proposal_not_resolved`** when the proposal is still pending or is escalated. An escalated proposal has not been decided by anyone yet, so there is nothing to override; that is EP-41's job.
+
+Both answer the same shape:
+
+```json
+{
+  "data": {
+    "proposal_id": 77,
+    "status": "approved",
+    "resolved_at": "2026-08-28T10:15:00Z",
+    "version_number": 4,
+    "attachments_created": 1,
+    "seller_unblocked": true
+  }
+}
+```
+
+`version_number` is the version this decision wrote, and is **null where it wrote none**. `attachments_created` is `0` on a rejection.
+
+**`seller_unblocked` is true on both outcomes of EP-41, and that is the point of the field.** Approval and rejection unblock the proposing seller equally: what blocked them was an unresolved proposal, not an unfavourable one. A rejected seller keeps no listing and gets no version, and is free to start a fresh attempt immediately. Interface copy that describes rejection as leaving them blocked is wrong.
+
+**What each decision does to the record:**
+
+| Endpoint | Decision | Version | Attachment | Record |
+|---|---|---|---|---|
+| EP-41 | approve | written, attributed to the proposing store | the withheld listing is created | changes applied |
+| EP-41 | reject | none | none | untouched |
+| EP-42 | approve, on a rejected proposal | written, attributed to the proposing store | the withheld listing is created | changes applied |
+| EP-42 | reject, on an approved proposal | **a further version**, administrator originated | **left alone** | reversible fields restored |
+
+**A version written by EP-41 or by EP-42 approving is an ordinary proposal version.** `caused_by_store` names the proposing store and `is_admin_originated` is false, because the change is the seller's and an administrator only decided it. Section 11.11 promises sellers that `caused_by_store` names whoever's proposal produced a version, and an escalation settled in their favour is exactly that.
+
+**Reversing an approval writes a further version and deletes nothing.** The record moves forward to a state resembling the one before the approval; it does not move backwards, and no version is removed from the chain. Two things survive a reversal deliberately:
+
+- **Attribute options the approval added, and every combination generated from them.** Invariant 2 forbids removing a combination, by anyone, including an administrator. A reversal that stranded generated combinations could never be cleaned up.
+- **The proposing seller's attachment.** Reversing a claim about what a product *is* says nothing about whether that shop stocks it.
+
+**EP-43 edits a record directly.** The one path into product data that is not a proposal, and it exists because some corrections have nobody to propose them.
+
+```json
+{
+  "name": "Vertex One Smartphone",
+  "description": "...",
+  "category": "Mobile",
+  "specifications": { "Battery": "5200 mAh", "Display": "6.1 inch OLED" },
+  "attributes": [{ "name": "Colour", "options": ["Black", "Grey", "Sand"] }]
+}
+```
+
+Every field is optional and at least one must be present. **`slug` is not accepted**: it is the record's public address, every static page and every inbound link is keyed by it, and a rename would break all of them for a cosmetic gain.
+
+`specifications` **replaces** the map wholesale when present, so a key omitted from it is removed. A specification is a free form fact about the record and carries nothing that depends on it.
+
+`attributes` is **additive and merges by name**. An option list is widened, never narrowed: sending `["Black", "Sand"]` against a record holding `["Black", "Grey"]` produces `["Black", "Grey", "Sand"]`. Widening generates the combinations the new options make possible and **leaves every existing combination and every existing attachment exactly as it was**, so a shop carrying Black keeps carrying Black.
+
+**Naming an attribute the record does not already define is refused with `validation_failed`.** Adding a new dimension to a record that already has combinations would leave every one of them missing a value for it, permanently, since nothing can remove a combination. The wizard is where a product's attribute set is decided.
+
+EP-43 writes an **administrator originated version**: `is_admin_originated` is true, `caused_by_store` is null, and the acting administrator is recorded server side and named to nobody. It answers the updated record in the EP-61 shape.
+
+**A pending proposal on the same product does not block an administrator edit**, and the edit does not disturb the proposal. The proposal still applies its own values if it is later approved. The two are independent, and making an administrator wait three days for a peer review to conclude before fixing an obvious error would be the wrong trade.
+
+**EP-44 removes a community post.**
+
+```json
+{ "data": { "deleted": true, "replies_hidden": 3 } }
+```
+
+**Soft deleted, never removed.** The row survives, and every read path already hides it: the post vanishes from the thread, and so do its replies, which is what `replies_hidden` counts. There is no tombstone anywhere and no "removed by an administrator" placeholder, per section 11.10. Deleting a reply hides that reply alone and reports `replies_hidden: 0`.
+
+There is no endpoint that restores a post, and none is planned.
+
+**EP-49 removes an image from a record.** Administrator only, and it is the only deletion path for one: a seller may add an image through EP-48 and may never remove one, because an uploader who could remove an image could remove one a later seller relies on.
+
+```json
+{ "data": { "deleted": true, "images_remaining": 2 } }
+```
+
+The file is removed from storage as well as the row. It is keyed by product **slug** like every other product route in the public group, not by id.
+
+**EP-45 is the platform at a glance.**
+
+```json
+{
+  "data": {
+    "products": { "total": 5, "with_sellers": 3, "without_sellers": 2 },
+    "stores": { "total": 6, "live": 5, "dark": 1 },
+    "proposals": { "pending": 2, "escalated": 1, "approved": 4, "rejected": 1 },
+    "community": { "posts": 14, "verified_users": 7 },
+    "views": { "last_7_days": 312, "last_30_days": 1204 },
+    "oldest_escalation_opened_at": "2026-08-20T09:00:00Z"
+  }
+}
+```
+
+`oldest_escalation_opened_at` is **null when nothing is escalated**, and is the one figure on this endpoint that names an obligation rather than a fact: while it is set, a seller is blocked and waiting. `views` counts UTC days, matching section 11.11.
+
+**The administrator product list**, returned by EP-60, paginated per section 2 and accepting `?q=` and `?category=`.
+
+```json
+{
+  "id": 12,
+  "slug": "vertex-one-smartphone",
+  "name": "Vertex One Smartphone",
+  "category": "Mobile",
+  "seller_count": 5,
+  "variant_count": 6,
+  "image_count": 3,
+  "current_version_number": 3,
+  "has_pending_proposal": true
+}
+```
+
+`has_pending_proposal` covers pending **and** escalated, because both mean a seller is blocked on this record and an administrator editing it should know.
+
+**The administrator product detail**, returned by EP-61 and by EP-43.
+
+```json
+{
+  "id": 12,
+  "slug": "vertex-one-smartphone",
+  "name": "Vertex One Smartphone",
+  "description": "...",
+  "category": "Mobile",
+  "specifications": { "Battery": "5200 mAh" },
+  "attributes": [{ "id": 4, "name": "Colour", "options": ["Black", "Grey"], "position": 0 }],
+  "variants": [
+    { "id": 88, "attribute_values": { "Colour": "Black" }, "is_default": false, "seller_count": 2 }
+  ],
+  "images": [{ "id": 7, "url": "...", "mime_type": "image/jpeg", "position": 0 }],
+  "current_version_number": 3,
+  "seller_count": 5,
+  "has_pending_proposal": true
+}
+```
+
+**Every generated combination appears, including ones no seller carries**, exactly as section 11.5 requires of the public shape. An administrator screen that hid them would be the first place somebody got the idea a combination can be removed.
+
+**`created_by_store_id` is absent here as everywhere else**, per section 6. Administrators are not an exception to the three never exposed fields; the record is platform owned and there is no reader for whom that stops being true.
+
 ---
 
 ## 12. Change log
@@ -758,3 +989,4 @@ The snapshot is the **complete record state at that version**, not a diff, so re
 | 5 | 2026-08-27 | M8. Added section 11.9, the attachment update request and response, the detach response carrying `store_is_live`, the wishlist item, and the wishlist add request. EP-36 paginates per section 2. Recorded that a repeated wishlist add answers the existing item rather than failing. No existing shape changed |
 | 6 | 2026-08-27 | M9. Added section 11.10, the community post, the post creation request, and the three verification shapes. EP-31 and EP-57 use cursor pagination per section 2. Clarified that a wishlist item's `lowest_price_minor` and `currency` are null together when nobody carries the variant, closing the M8 open request. `verification_result` and the `not_verified` and `attempts_exhausted` codes were already registered and are unchanged |
 | 7 | 2026-08-28 | M10. Added section 11.11, the view recording request and response, the seller analytics shape, and the two version history shapes. EP-46 paginates per section 2. Recorded in section 9 that EP-52 shares the public catalogue limiter. No new error codes: `not_attached` and `store_required` were registered in section 7 since version 1 and are reachable from the version endpoints for the first time now. No existing shape changed |
+| 8 | 2026-08-28 | M11. Added section 11.12, the administrator proposal list and detail, the resolve and override request and shared response, the direct edit request, the post and image deletion responses, the metrics shape, and the two administrator product shapes. EP-40, EP-58, and EP-60 paginate per section 2. Registered `proposal_not_escalated` and `proposal_not_resolved` in section 7. Recorded that an administrator resolving an escalation writes an ordinary proposal version attributed to the proposing store, that reversing an approval writes a further version and removes nothing, and that EP-59 names the proposing store where EP-29 hides it. No existing shape changed |

@@ -10,6 +10,9 @@ use App\Models\Product;
 use App\Models\ProductAttribute;
 use App\Models\ProductImage;
 use App\Models\ProductView;
+use App\Models\Proposal;
+use App\Models\ProposalReviewer;
+use App\Models\ProposalVote;
 use App\Models\Store;
 use App\Models\User;
 use App\Models\Variant;
@@ -44,6 +47,7 @@ class CatalogueSeeder extends Seeder
 
         $this->createVersionHistory($stores);
         $this->createViewHistory($stores);
+        $this->createEscalatedProposal($stores);
 
         $this->command->info('Catalogue seeded.');
     }
@@ -392,6 +396,93 @@ class CatalogueSeeder extends Seeder
         }
 
         $this->command->info(count($rows).' product views seeded across 45 days.');
+    }
+
+    /**
+     * A proposal stuck waiting on an administrator (M11, EP-40 and EP-41).
+     *
+     * Without this the escalation queue seeds empty, which is the one screen in the
+     * administrator group that cannot be built or judged against an empty state: the
+     * whole point of it is the row that says somebody has been unable to trade for nine
+     * days.
+     *
+     * Escalated on a **tie**, which is the matrix row that most needs a person. Two
+     * reviewers looked at the same claim and disagreed, so there is no majority either
+     * way and defaulting would mean picking a side the reviewers deliberately did not
+     * pick.
+     *
+     * Deliberately old. `review_opens_at` is nine days back and the window closed six
+     * days ago, so the queue has something with real age at the top of it rather than a
+     * row that only looks urgent if you read the timestamp carefully.
+     *
+     * **No attachment exists for the proposing store on this product**, and that absence
+     * is the block. Approving through EP-41 is what finally creates it.
+     *
+     * @param  array<string, Store>  $stores
+     */
+    private function createEscalatedProposal(array $stores): void
+    {
+        $product = Product::query()->where('slug', 'meridian-14-laptop')->firstOrFail();
+
+        $proposer = $stores['jaffna'];
+        $opensAt = CarbonImmutable::now('UTC')->subDays(9);
+
+        $proposal = Proposal::create([
+            'product_id' => $product->id,
+            'store_id' => $proposer->id,
+            'changes' => [
+                'Weight' => ['from' => '1.3 kg', 'to' => '1.24 kg'],
+            ],
+            'ai_answers' => [],
+            // Neither reaches any response body, at any access level, administrators
+            // included. They are here because the columns are NOT NULL and the matrix
+            // read the band when this escalated.
+            'confidence_score' => 0.820,
+            'confidence_band' => Proposal::BAND_HIGH,
+            'status' => Proposal::STATUS_ESCALATED,
+            'resolution_reason' => 'tie_no_majority',
+            'review_opens_at' => $opensAt,
+            'review_closes_at' => $opensAt->addDays(Proposal::REVIEW_WINDOW_DAYS),
+            'resolved_at' => $opensAt->addDays(Proposal::REVIEW_WINDOW_DAYS),
+            // What the seller is waiting to list, withheld until this resolves.
+            'intended_variant_ids' => [
+                $product->variants()->orderBy('id')->first()->id,
+            ],
+            'intended_price_minor' => 431_000,
+            'intended_currency' => 'LKR',
+        ]);
+
+        /*
+         * The frozen reviewer set, recorded when the proposal opened. The two stores
+         * that carried the laptop then, which is what makes their disagreement a tie
+         * rather than an accident of who happened to be listing today.
+         */
+        $reviewers = [$stores['colombo_a'], $stores['colombo_b']];
+
+        foreach ($reviewers as $reviewer) {
+            ProposalReviewer::create([
+                'proposal_id' => $proposal->id,
+                'store_id' => $reviewer->id,
+            ]);
+        }
+
+        ProposalVote::create([
+            'proposal_id' => $proposal->id,
+            'store_id' => $stores['colombo_a']->id,
+            'vote' => true,
+            'comment' => 'Weighed mine on a kitchen scale and got 1.24 kg without the charger.',
+            'created_at' => $opensAt->addDay(),
+        ]);
+
+        ProposalVote::create([
+            'proposal_id' => $proposal->id,
+            'store_id' => $stores['colombo_b']->id,
+            'vote' => false,
+            'comment' => 'The box on ours says 1.3 kg. I have not weighed it myself.',
+            'created_at' => $opensAt->addDays(2),
+        ]);
+
+        $this->command->info('One escalated proposal seeded, blocking Northern Supplies for 9 days.');
     }
 
     /**

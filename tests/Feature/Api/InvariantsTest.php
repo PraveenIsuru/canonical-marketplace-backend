@@ -188,17 +188,46 @@ it('never lets a seller write to a product, attribute, or variant', function ():
      */
     $writable = collect(Route::getRoutes())
         ->filter(fn ($route): bool => str_starts_with($route->uri(), 'api/'))
-        ->filter(fn ($route): bool => (bool) array_intersect($route->methods(), ['PUT', 'PATCH', 'DELETE']))
-        ->map(fn ($route): string => implode('|', $route->methods()).' '.$route->uri())
-        ->values();
+        ->filter(fn ($route): bool => (bool) array_intersect($route->methods(), ['PUT', 'PATCH', 'DELETE']));
 
-    // The only writes a seller has are to their own store and their own location.
-    // Nothing addresses a product, an attribute, or a variant.
+    /*
+     * Every write route that addresses a canonical record must be administrator gated.
+     *
+     * Until M11 this asserted that no such route existed at all. M11 added two, EP-43
+     * and EP-49, and the invariant is not that nothing writes to a product: it is that
+     * **no seller** does, and invariant 6 explicitly contemplates an administrator edit.
+     *
+     * So the assertion moved rather than weakened. It now says any route that can write
+     * to a product, an attribute, or a variant carries the `admin` middleware, which is
+     * a stronger claim than the one it replaced: a new seller route touching a record
+     * fails here, and so does an administrator route that forgot its gate.
+     */
     foreach ($writable as $route) {
-        expect($route)->not->toContain('products')
-            ->and($route)->not->toContain('variants')
-            ->and($route)->not->toContain('attributes');
+        $signature = implode('|', $route->methods()).' '.$route->uri();
+
+        $touchesRecord = str_contains($route->uri(), 'products')
+            || str_contains($route->uri(), 'variants')
+            || str_contains($route->uri(), 'attributes');
+
+        if (! $touchesRecord) {
+            continue;
+        }
+
+        $this->assertContains(
+            'admin',
+            $route->gatherMiddleware(),
+            "{$signature} writes to a canonical record without the admin middleware.",
+        );
     }
+
+    // And a seller is actually refused by the two that exist, rather than merely being
+    // expected to be by the middleware list.
+    $this->actingAs($user, 'sanctum')
+        ->patchJson("/api/admin/products/{$product->id}", ['name' => 'Renamed by a seller'])
+        ->assertForbidden()
+        ->assertJsonPath('code', 'forbidden');
+
+    expect($product->refresh()->name)->toBe('Aurora Field Recorder FR-2');
 
     // And the record is unchanged by the one seller flow that touches it at all.
     $before = [$product->name, $product->specifications];

@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+use App\Http\Controllers\Api\AdminModerationController;
+use App\Http\Controllers\Api\AdminProductController;
+use App\Http\Controllers\Api\AdminProposalController;
 use App\Http\Controllers\Api\AiJobController;
 use App\Http\Controllers\Api\AnalyticsController;
 use App\Http\Controllers\Api\AttachController;
@@ -337,5 +340,82 @@ Route::middleware(['auth:sanctum', 'store'])->group(function (): void {
 | Refuses with 403 forbidden when is_admin is false.
 */
 Route::middleware(['auth:sanctum', 'admin'])->prefix('admin')->group(function (): void {
-    // M11 EP-40 to EP-45, EP-49, EP-58 to EP-61
+    /*
+     * M11 The escalation queue, EP-40.
+     *
+     * The reason this group exists. The resolution matrix escalates on a tie, on nobody
+     * voting, and on a well evidenced submission the incumbents disagree with, and in
+     * each case the proposing seller cannot list the product until somebody answers.
+     * Ordered oldest first, so the row at the top is whoever has waited longest.
+     *
+     * Declared before `/proposals/{proposal}` so "escalations" is never mistaken for an
+     * id, the same reason "mine" and "to-review" come first in the seller group.
+     */
+    Route::get('/escalations', [AdminProposalController::class, 'escalations']);
+
+    // M11 EP-58 and EP-59. Reading proposals as an administrator: every one of them,
+    // with the proposing store named and the vote split visible.
+    Route::get('/proposals', [AdminProposalController::class, 'index']);
+    Route::get('/proposals/{proposal}', [AdminProposalController::class, 'show'])
+        ->whereNumber('proposal');
+
+    /*
+     * M11 EP-41 and EP-42. The two writes that settle a proposal.
+     *
+     * Behind the write limiter. Each is cheap to make and expensive in effect: one
+     * unblocks a seller who has been unable to trade, the other rewrites what the
+     * catalogue claims about a record every seller on it shares.
+     */
+    Route::middleware('throttle:writes')->group(function (): void {
+        Route::post('/proposals/{proposal}/resolve', [AdminProposalController::class, 'resolve'])
+            ->whereNumber('proposal');
+
+        Route::post('/proposals/{proposal}/override', [AdminProposalController::class, 'override'])
+            ->whereNumber('proposal');
+    });
+
+    /*
+     * M11 The administrator catalogue, EP-60, EP-61, and EP-43.
+     *
+     * Keyed by **id**, unlike every public product route, which is keyed by slug. A slug
+     * is a public address derived from a name and could be wrong about the record; an
+     * administrator correcting that name should operate on the row rather than on a
+     * string derived from the thing they are about to change.
+     */
+    Route::get('/products', [AdminProductController::class, 'index']);
+    Route::get('/products/{product}', [AdminProductController::class, 'show'])
+        ->whereNumber('product');
+
+    Route::patch('/products/{product}', [AdminProductController::class, 'update'])
+        ->whereNumber('product')
+        ->middleware('throttle:writes');
+
+    /*
+     * M11 EP-44. The only thing in the platform that can remove a post, and it soft
+     * deletes rather than destroying. There is no restore endpoint and none is planned.
+     */
+    Route::delete('/community/posts/{post}', [AdminModerationController::class, 'deletePost'])
+        ->whereNumber('post')
+        ->middleware('throttle:writes');
+
+    // M11 EP-45. Counts rather than analytics, and nothing on it is per user.
+    Route::get('/metrics', [AdminModerationController::class, 'metrics']);
 });
+
+/*
+|--------------------------------------------------------------------------
+| Administrator actions outside the admin prefix
+|--------------------------------------------------------------------------
+*/
+
+/*
+ * M11 EP-49. Removing an image from a record.
+ *
+ * Outside the `admin` prefix because it is keyed by product slug and sits on the same
+ * path as EP-48, which added the image. Admin gated all the same: a seller may add an
+ * image and may never remove one, since an uploader who could remove an image could
+ * remove one a later seller relies on.
+ */
+Route::delete('/products/{product}/images/{image}', [AdminModerationController::class, 'deleteImage'])
+    ->whereNumber('image')
+    ->middleware(['auth:sanctum', 'admin', 'throttle:writes']);
