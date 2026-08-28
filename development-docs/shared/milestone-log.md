@@ -32,7 +32,7 @@ Update the two status columns as milestones complete. Everything else in this fi
 | M8 Listings and wishlist | Done | Done |
 | M9 Community and verification | Done | Done |
 | M10 Analytics and versions | Done | Done |
-| M11 Administration | Done | Not started |
+| M11 Administration | Done | Done |
 | M12 Caching and revalidation | Not started | Not started |
 
 Values: `Not started`, `In progress`, `Done`.
@@ -1449,6 +1449,75 @@ Invariant 1's assertion walked every registered write route and refused any whos
 
 ---
 
+### M11 Administration, frontend, 2026-08-28
+
+**Shipped.**
+- S-32 `/admin/escalations`, the queue, oldest blocked first
+- S-33 `/admin/escalations/[id]`, settling one escalation with EP-41
+- S-34 `/admin/products`, the searchable catalogue
+- S-35 `/admin/products/[id]/edit`, direct editing with EP-43 and image removal with EP-49
+- S-36 `/admin/proposals/[id]`, reversing a resolved decision with EP-42
+- S-37 `/admin/metrics`, the platform snapshot
+- S-06 gains an administrator remove on every post and reply, through EP-44
+- `components/admin/`: `BlockedFor`, `ResolutionReason`, `VoteTally`, `SpecificationEditor`, `AttributeWidener`, `RemovePostButton`
+- `lib/api/admin-proposals.ts`, `lib/api/admin-products.ts`, `lib/api/admin-moderation.ts`, `lib/schemas/admin.ts`, `types/admin.ts`
+- `app/(admin)/layout.tsx`, wider than the seller group because these screens carry comparisons and tables side by side
+
+**Contract.**
+- Contract version at time of writing: 8
+- Changes made to api-contract.md: none. This side mirrors it
+- Error codes handled on screen: **`proposal_not_escalated`** (409) and **`proposal_not_resolved`** (409), both new this milestone, plus `forbidden` (403) and `validation_failed` (422)
+
+**Nothing needed adding to the navigation or the proxy.**
+
+`AccountNav` has carried `/admin/escalations`, `/admin/products`, and `/admin/metrics` since M0, and `/admin` has been in `PROTECTED_PREFIXES` just as long. Building the routes is what made them live. Worth recording because the obvious reading of "wire up the admin screens" is to add links, and adding them would have produced duplicates. **M0's `queryKeys.admin` factory was also exactly right**, all six keys, which is the first time an M0 speculative artefact has survived contact unchanged.
+
+**Deviations from the plan.**
+- **The blocked duration is computed here, not read from the API.** The backend deliberately shipped no `blocked_days` field and sends `review_opens_at` instead, so `BlockedFor` does the arithmetic in one place. It counts from when the proposal **opened**, not from when it escalated: the seller was blocked the moment they submitted, and the days spent waiting on peers count as much as the days spent waiting on an administrator.
+- **That number is the largest thing on an escalation row**, and turns red past seven days. Every other figure on S-32 describes a proposal; this one describes a person who cannot sell something, and it is the reason to act today rather than tomorrow.
+- **S-33 and S-36 are separate routes reading the same endpoint.** S-33 only ever calls EP-41 and S-36 only ever calls EP-42. Keeping them apart is what stops "this creates a further version" copy appearing in front of somebody whose decision creates the first one, and the two endpoints refuse each other's states anyway.
+- **S-33's confirmation keys off `seller_unblocked` rather than off which button was pressed**, so the copy and the API cannot disagree. Both outcomes say the seller is unblocked, because both are.
+- **S-36's "later versions exist" warning is derived, not invented.** EP-59 carries no version number of its own, so the proposal's version cannot be named. What can be said honestly is that versions exist whose `created_at` is later than the proposal's `resolved_at`, and that a reversal will not touch them. That is EP-46 doing work it was not built for, and it is the truthful version of the warning that was asked for.
+- **S-36 offers a "let it stand" action.** EP-42 accepts the outcome a proposal already holds and records that an administrator reviewed it, which is worth more than a review that leaves no trace. It is offered as a distinct, non destructive choice rather than hidden.
+- **S-35 offers no add-attribute control at all**, and not a disabled one. The API refuses it, it is a live open request rather than a settled design, and a greyed out button would say the capability exists and is merely unavailable to this person. The screen states the rule instead.
+- **`SpecificationEditor` is a full editor with a remove per row**, because EP-43 replaces the map wholesale. An add-only form would have made removal impossible while appearing to work, which is the kind of mismatch that only surfaces when somebody tries to delete a wrong specification and cannot.
+- **The combination preview is arithmetic on data already in hand**: the cross product of the option lists after widening, minus the combinations that exist. No endpoint was needed and none was asked for.
+- **S-37 has an explicit slow state.** After 2.5 seconds the skeleton gains a line saying every view ever recorded is being counted with no rollup behind it. The backend flagged this as a screen that will get slower; a skeleton that just sat there would read as broken.
+- **`oldest_escalation_opened_at` leads S-37** rather than sitting in a grid of counts, and renders as a reassurance when null. It is the only figure on that endpoint that names an obligation.
+- **No administrator identity appears on any seller facing screen.** `resolved_by` is rendered on S-36 only, which is behind the admin gate. Nothing on S-06, the version history, or any proposal screen names who moderated or decided anything.
+- **The admin remove on S-06 required no change to how a removed post reads.** The thread already handles an absent post by it being absent, which is what M9 built, so this milestone added a control and nothing else.
+
+**A bug TypeScript caught that a test would not have.**
+
+S-36 compared `confirming === data.status`, a `Decision` against a `ProposalStatus`. The two vocabularies deliberately differ, `approve` against `approved`, so the comparison was false forever and the "let it stand" dialog would have shown the reversal warning to somebody who asked to leave the decision alone. It was found by `tsc`, not by clicking, and is now a named `standingDecision` variable with the reason written beside it.
+
+**Known gaps handed to the other side.**
+- **Nothing blocking.**
+- **The seeder produces no community posts, so S-06's administrator remove cannot be demonstrated on seeded data.** The walk below needed a thread created by hand. Everything else in M11 had seeded data waiting for it, and this is the one state that did not. **Raised as an open request below.**
+- **S-34's search is a plain name match, deliberately**, not the buyer's relevance ranked catalogue search. An administrator is finding one known record, and a stale index would be actively misleading about what exists. There is no category filter control on screen yet, though the endpoint accepts one and the URL parameter is honoured.
+- **S-32 does not poll.** Its staleness is 30 seconds, which is short for this application, but two administrators working the same queue will still race. That is handled where it matters: EP-41 answers `proposal_not_escalated` and S-33 renders it as "another administrator settled this first" with a link to see what they decided, rather than as a failure.
+- **There is no bulk action anywhere.** Each escalation is a separate judgement about a separate product, and a "resolve all" would be the control that made that stop being true.
+- **No screen restores anything.** No post restore, no version rollback, no image undelete. All three are absent by design and none is rendered as a disabled control.
+- **The M9 verification limiter question is still open**, unchanged by this milestone.
+
+**Open requests raised by this milestone.**
+- **The seeder creates no community posts.** S-06's administrator remove, and the four composer states M9 built, have no seeded thread to render against. Verifying ownership to create one by hand costs a photograph upload per product, so a seeded verified buyer with a short thread on one product would make both milestones demonstrable. Not blocking: the control is built and proven against a hand made thread.
+
+**Verified by.**
+- `npm run docs:check`, `npm run lint`, `npx tsc --noEmit`, and `npm run build` all clean, the build run from a **cleared** `.next`
+- `/products/[slug]` still prerendered afterwards: five paths marked SSG. Adding the moderation control to `PostThread` did not deopt anything, because the community route was already server rendered on demand
+- All six administrator routes redirecting **307 to `/login?next=…`** anonymously and answering 200 signed in as an administrator
+- Walked against the live API through the running app on seeded data:
+  - **UF-35.** EP-40 returned the nine day old tie, Northern Supplies, one vote each way of two reviewers, with **no confidence field anywhere in the body**. EP-59 showed both reviewer comments and the withheld listing at 431000 LKR. Approving answered `seller_unblocked: true`, `attachments_created: 1`, `version_number: 2`; the proposal stopped blocking, the attachment appeared, and the queue went to its empty state
+  - **UF-36.** Overriding that approval answered `version_number: 3`. The chain then held **three** versions with the reversal marked administrator originated, the weight was back to 1.3 kg by moving forward, and **the seller kept their listing**
+  - **UF-37.** S-34 found the laptop by name; EP-43 added a `64GB` option and answered version 4 with the option list at four and the combinations at four. **All four existing attachments were unchanged in variant and price.** The preview arithmetic predicted exactly one new combination, which is what was generated
+  - **UF-38.** An administrator removed a top level post: `replies_hidden: 1`, the thread went to zero posts with **no tombstone**, the reply endpoint answered 404, and the row survived as a soft delete, one visible against two with trashed
+  - **UF-39.** EP-45 answered the snapshot with `oldest_escalation_opened_at` null once the queue was clear
+  - **Refusals:** a new attribute refused with `validation_failed` naming the attribute, `proposal_not_escalated` on resolving a settled proposal, `proposal_not_resolved` on overriding an escalated one, and `forbidden` for a signed in seller reaching an administrator endpoint
+- The database was reseeded afterwards, so the escalation is back and the next session starts where this one did
+
+---
+
 ## 4. Open requests
 
 Things one side needs from the other that are not yet built. Remove a row only when it has shipped and been recorded in section 3.
@@ -1469,5 +1538,7 @@ Things one side needs from the other that are not yet built. Remove a row only w
 | Frontend | 2026-08-27 | **The 5 per minute `verification` limiter and the five attempt ceiling interact.** Each attempt costs two requests (start plus submit), so a buyer working through all five in one sitting trips `rate_limited` after roughly two and a half. Both limits are correct in isolation. Worth deciding whether the limiter should be widened, or whether S-15 should explain the pause | Open. Not blocking: the ceiling is enforced correctly and the refusal is a registered code the client already handles |
 
 | Backend | 2026-08-28 | **EP-43 cannot add a new attribute to a product that already defines one.** Options can be added to an existing attribute, but naming a new one is refused, because every combination generated under the old attribute set would be left without a value for it and invariant 2 means those could never be cleaned up. Needs a design decision about what happens to those combinations, not a relaxed validation rule | Open. Not blocking: the milestone's stated requirement is adding an option, which works |
+
+| Frontend | 2026-08-28 | **The seeder creates no community posts.** S-06 and its new administrator remove have no seeded thread to render against, and neither do the four composer states M9 built. Verifying ownership by hand costs a photograph upload per product, so a seeded verified buyer with a short thread on one product would make both milestones demonstrable | Open. Not blocking: the control is built and was proven against a hand made thread |
 
 Use this table rather than guessing. A frontend screen that needs a field the contract does not define adds a row here. It does not invent a field name and hope.
