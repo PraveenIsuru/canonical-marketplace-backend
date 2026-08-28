@@ -31,7 +31,7 @@ Update the two status columns as milestones complete. Everything else in this fi
 | M7 Peer review | Done | Done |
 | M8 Listings and wishlist | Done | Done |
 | M9 Community and verification | Done | Done |
-| M10 Analytics and versions | Done | Not started |
+| M10 Analytics and versions | Done | Done |
 | M11 Administration | Not started | Not started |
 | M12 Caching and revalidation | Not started | Not started |
 
@@ -1294,6 +1294,76 @@ A long running `queue:work` bootstraps its configuration once and does not see `
 - The rejected proposal case driven through `ProposalResolutionService` with two real reject votes rather than asserted against the code that writes versions, then read back through EP-46: still one version, no row carrying that proposal id, and the product's specification untouched
 - Walked against the live API on seeded data: EP-52 recording anonymously with `X-Access-Level: public` and no `Set-Cookie`, attributing to two different carrying stores, and dropping a store that does not carry the product; EP-39 read by two sellers over the same rows returning 1 view each out of 3; EP-46 returning the three step chain with the administrator edit carrying a null store and version 1 carrying an empty `changed_fields`; EP-47 returning the earlier battery figure from version 1 and the current one from version 3; the administrator reading a history with no store of their own, including on a product nobody sells; and the detach walk above
 - `composer test` green: Pint passed, PHPStan level 7 with **0 errors**, 413 tests with 407 passed and 5 todo
+
+---
+
+### M10 Analytics and versions, frontend, 2026-08-28
+
+**Shipped.**
+- S-30 `/analytics`, date ranged view counts with the daily chart and the per product breakdown
+- S-31 `/versions/[slug]` and `/versions/[slug]/[number]`, the version chain and one snapshot
+- The EP-52 view recording call added to S-04, and the store context links on S-07 that feed it
+- `components/product/ViewRecorder.tsx`, `components/product/VersionAccessNotice.tsx`, `components/seller/ViewsChart.tsx`
+- `lib/api/analytics.ts`, `lib/api/versions.ts`, `lib/schemas/analytics.ts`, `lib/schemas/version.ts`, `types/analytics.ts`
+- UTC day helpers in `lib/format/dates.ts`, and a rewritten version section in `types/product.ts`
+- `/versions` added to the proxy's protected prefixes; "Record history" links added to S-21 and to the analytics table
+
+**Contract.**
+- Contract version at time of writing: 7
+- Changes made to api-contract.md: none. This side mirrors it
+- Error codes handled on screen: `not_attached` (403) and `store_required` (403). Both were registered since version 1 and are reached by these screens for the first time
+
+**X-04's `/analytics` link needed no change and never did.**
+
+The entry has been in `AccountNav` since M0, pointing at a route that did not exist. Building the route is the whole of "wiring it up". Worth recording because the obvious reading of the task was to add a link, and adding a second one would have produced a duplicate.
+
+**Version history is not under `/products/`, and that is load bearing.**
+
+The proxy matcher deliberately excludes `products`, `search`, and `stores` so public catalogue traffic never resolves a session. A protected page at `/products/{slug}/versions` would have inherited that exclusion and silently lost its login redirect, and it would also have meant two route groups owning the same `products/[slug]` subtree. S-31 lives at `/versions/{slug}` instead, with `/versions` added to `PROTECTED_PREFIXES`. Neutral between the two audiences the endpoint serves: an administrator has no listings, so anything under `/listings/` would have been wrong for them.
+
+**Deviations from the plan.**
+- **EP-52 goes straight to Laravel, not through `/api/proxy`.** The proxy attaches the Bearer token from the httpOnly cookie, and sending one to a public route is what invariant 7 rules out. The call uses `credentials: 'omit'` cross origin, so no cookie and no Authorization header reach it. There is precedent: `SellerListPanel` already fetches the public seller list the same way. Confirmed the backend answers the preflight with `Access-Control-Allow-Methods: POST`.
+- **The recorder is a client effect, not a server call.** S-04 is statically generated and served from the cache, so a view recorded during the render would count builds rather than people, and reading anything request scoped there would deopt the route out of static generation. It is wrapped in `<Suspense>` because it reads the query string, which is the same pattern `proposals/page.tsx` uses, and a clean rebuild confirms the route is still `●` SSG afterwards.
+- **A ref guard makes it fire once per render.** React invokes effects twice under StrictMode in development, and without the guard every development view would be counted twice. Keyed by slug, so a client side navigation to another product records again while a re-render of the same one does not.
+- **Every EP-52 failure is silent.** No retry, no error boundary, no visible state. A visitor came to read about a product and nothing they came for depends on this call. `store_id: null` coming back after sending an id is likewise not surfaced: the seller detached between the page rendering and the view arriving, which is an ordinary race rather than anything the visitor did.
+- **Only S-07 sends a store context.** It is the one place in this application where a visitor arrives at a product *through* a store. The seller list on S-04 links to `/stores/{id}`, so nobody arrives at the product from it, and attributing a view to a seller because their row happened to render would push every seller's numbers wrong in the same direction. No other product link anywhere carries the parameter.
+- **The daily chart is inline SVG rather than a charting library.** Thirty bars and two rectangles each does not justify a dependency, and this way it inherits the page's own colours in both themes. No dependency was added for this milestone.
+- **The two bars are overlaid, not side by side.** `store_views` is a subset of `product_views`, and drawing them as neighbours would invite a seller to add them together.
+- **The UTC day reckoning is stated on screen rather than corrected.** Shifting labels to local time would make the daily bars disagree with the totals the API computed, and a seller comparing the two would be right to trust neither. The screen says an evening's traffic may land on the next day's bar.
+- **`store_required` and `not_attached` get completely different copy** even though both are 403. One means "you have no shop", the other "you have one but do not stock this", and they have nothing in common except the status code.
+- **Neither refusal is styled as an error.** Nothing failed. The answer was no. Both are rendered as a notice or an empty state, and both are `retry: false` on the query, because retrying a decision three times only delays the explanation.
+- **`types/product.ts` was rewritten rather than extended**, exactly as the backend's entry warned. The M0 file guessed `causing_store` and `causing_admin`; the real shape is `caused_by_store` with `is_admin_originated`, no administrator named and no proposal id. It was imported nowhere, which is the second time an M0 speculative type has turned out to be wrong in every field.
+- **`assertNoVersionLeak` refuses `caused_by_user`, `causing_admin`, and `proposal_id`.** None is forbidden by section 6, but all three were left out of 11.11 on purpose, and zod ignores keys it was not told about, so a backend regression that started emitting one would validate silently and sit in memory waiting for somebody to render it.
+- **No rollback control anywhere on S-31**, per section 2.3, and not a disabled one either. A greyed out button would imply the capability exists and is merely unavailable to this reader. The snapshot page says outright that a correction goes forward as a new version.
+- **Version 1 renders "the first version, where the record began" rather than "changed nothing".** `changed_fields` is empty there because it created the record, and saying it changed nothing would be the wrong reading of an empty array.
+- **The analytics zero state and the empty state are separate.** "Nobody looked in this period" and "you are not carrying anything" both produce zeros, and they need different things done about them.
+
+**A stale build cache, which is worth knowing before anyone else sees it.**
+
+The first production build listed two prerendered product pages for slugs that are not in the database. `generateStaticParams` had been served an old catalogue out of `.next/cache`, which also explains a revalidate window that did not match the page. Deleting `.next` and rebuilding produced the correct five. Nothing was wrong with the code, but **a build output is only trustworthy from a clean `.next`**, and the phantom pages would have been read as a routing bug by anyone who found them first.
+
+Unrelated but noticed while checking: the product route reports a 30 second revalidate rather than the 300 the page declares, because `getSellers` fetches with `revalidate: 30` and Next takes the shortest window across a route. That is M2 behaviour and predates this milestone.
+
+**Known gaps handed to the other side.**
+- **Nothing blocking.**
+- **`user_id` is null on every view row, and the interface says so.** S-30 states plainly that nobody is identified. If an authenticated view path is ever added, that copy has to change with it.
+- **The store context is one parameter on one screen.** If a future screen lists sellers in a way that navigates to a product, it has to opt in explicitly by adding `?store={id}`, and it should only do so when the visitor genuinely arrives through that store. There is no automatic behaviour to inherit and that is deliberate.
+- **S-30 offers three range presets and no free date entry.** The endpoint accepts any `from` and `to`, so a custom range works by URL today. A date picker is worth adding if sellers ask for one; nothing is blocked without it.
+- **The analytics screen makes no claim about sales**, because the platform has none. Views are the only signal, and the copy says a view is somebody opening a product page and nothing more.
+- **Escalated proposals remain a dead end until M11**, unchanged by this milestone.
+- **Administrator screens are M11.** An administrator can read any version history through these same screens today, which is correct per the contract, but there is no administrator entry point to them: they reach one through a URL or through analytics, neither of which an administrator has. S-32 to S-37 should link version history where it helps.
+
+**Verified by.**
+- `npm run docs:check`, `npm run lint`, `npx tsc --noEmit`, and `npm run build` all clean, the build run from a **cleared** `.next`
+- `/products/[slug]` still prerendered: five paths marked SSG, `x-nextjs-prerender: 1` on the served page, no `Set-Cookie`, and the product name present in the HTML
+- The `ViewRecorder` confirmed present in the client bundle rather than assumed, by finding the view path in the emitted chunks
+- EP-52 walked with the exact request the browser sends, `Origin` set and no cookie: **201** with `X-Access-Level: public` and no `Set-Cookie`; a no context call attributed to null; a call through store 1 attributed to store 1; a call naming a store that does not carry the product attributed to **null rather than refused**; every new row carrying `user_id: null`
+- `?store=1` confirmed present on S-07's product links and on no other product link in the application
+- EP-39 through the running app's proxy with a real session cookie: 62 of 312 over 28 days, and the range control changing the totals, 19 of 90 over 7 days against 66 of 336 over 30
+- EP-46 and EP-47 through the same path: the three step chain with the administrator edit carrying a null store, version 1 carrying an empty `changed_fields`, and version 1's snapshot showing the earlier battery figure
+- **The detach walked through the running app on one unchanged cookie**: 200, detach, then **403 `not_attached`** on the next request, with a product the same store still carries answering 200 throughout
+- A signed in buyer with no store refused with **`store_required`** from both the version and the analytics endpoints
+- All three new routes redirecting **307 to `/login?next=…`** anonymously, answering 200 signed in as a seller, and `/versions/{slug}/0` answering 404 before reaching the API
 
 ---
 
