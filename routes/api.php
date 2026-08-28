@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\Api\AiJobController;
+use App\Http\Controllers\Api\AnalyticsController;
 use App\Http\Controllers\Api\AttachController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CategoryController;
@@ -13,6 +14,8 @@ use App\Http\Controllers\Api\ListingController;
 use App\Http\Controllers\Api\PasswordResetController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductImageController;
+use App\Http\Controllers\Api\ProductVersionController;
+use App\Http\Controllers\Api\ProductViewController;
 use App\Http\Controllers\Api\ProposalController;
 use App\Http\Controllers\Api\SearchController;
 use App\Http\Controllers\Api\SellerStoreController;
@@ -88,7 +91,18 @@ Route::middleware(['public', 'throttle:catalogue'])->group(function (): void {
     Route::get('/products/{product}/community/posts/{post}/replies', [CommunityController::class, 'replies'])
         ->whereNumber('post');
 
-    // M10 EP-52
+    /*
+     * M10 EP-52. Recording that somebody looked at a product.
+     *
+     * A write on a public route, which is unusual enough to say why: the thing being
+     * recorded is an anonymous page view, so requiring a token would count only the
+     * minority of visitors who happen to hold one and would make the numbers say
+     * something other than what a seller reads them as saying.
+     *
+     * Behind the catalogue limiter rather than a limiter of its own, because it is one
+     * call per product page render and belongs to the same traffic.
+     */
+    Route::post('/products/{product}/views', [ProductViewController::class, 'store']);
 });
 
 Route::middleware(['public', 'throttle:search'])->group(function (): void {
@@ -193,6 +207,23 @@ Route::middleware('auth:sanctum')->group(function (): void {
      */
     Route::post('/products/{product}/verification/submit', [VerificationController::class, 'submit'])
         ->middleware('throttle:verification');
+
+    /*
+     * M10 Version history, EP-46 and EP-47.
+     *
+     * Auth rather than Seller, unlike every other seller facing read in this file. The
+     * contract grants these to a seller attached to the product **or** an
+     * administrator, and the seller middleware would refuse an administrator holding no
+     * store of their own before the request reached the controller.
+     *
+     * The real check is in VersionHistoryService and is re-read on every request, so a
+     * seller who detaches loses the history on their next call rather than at their
+     * next sign in.
+     */
+    Route::get('/products/{product}/versions', [ProductVersionController::class, 'index']);
+
+    Route::get('/products/{product}/versions/{version}', [ProductVersionController::class, 'show'])
+        ->whereNumber('version');
 });
 
 /*
@@ -290,7 +321,13 @@ Route::middleware(['auth:sanctum', 'store'])->group(function (): void {
         ->whereNumber('attachment')
         ->middleware('throttle:writes');
 
-    // M10 EP-39, EP-46, EP-47
+    /*
+     * M10 EP-39. This store's view counts, over a date range.
+     *
+     * No store id parameter, here or anywhere on this route. The caller's own store is
+     * the only store this can answer about.
+     */
+    Route::get('/stores/mine/analytics', [AnalyticsController::class, 'show']);
 });
 
 /*

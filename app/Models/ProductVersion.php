@@ -8,6 +8,7 @@ use Database\Factories\ProductVersionFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Carbon;
 
 /**
  * One immutable snapshot in the version chain, which is also the audit record.
@@ -15,11 +16,15 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * No updated_at and no soft delete. A version is never edited once written, and a
  * rejected proposal produces no row here at all.
  *
+ * created_at is set by the database on insert and has no updated_at partner, because a
+ * version is written once and never edited.
+ *
  * @property int $id
  * @property int $product_id
  * @property int $version_number
  * @property array<string, mixed> $snapshot
  * @property bool $is_admin_originated
+ * @property Carbon $created_at
  */
 class ProductVersion extends Model
 {

@@ -1,6 +1,6 @@
 # API Contract
 
-**Contract version:** 6
+**Contract version:** 7
 **Owner:** the backend repository
 **Status:** authoritative
 
@@ -189,7 +189,7 @@ Applied as named limiters. Exceeding one returns 429 with the standard envelope 
 |---|---|
 | `login`, `password/*` | 5 per minute per IP |
 | `register` | 3 per hour per IP |
-| Public catalogue reads | 120 per minute per IP |
+| Public catalogue reads, and EP-52 view recording | 120 per minute per IP |
 | `search` | 30 per minute per IP |
 | `attach/*` | 20 per hour per store |
 | `verification/submit` | 5 per product per user, matching the attempt ceiling |
@@ -638,6 +638,113 @@ The buyer writes the code on paper, photographs it beside the product, and submi
 
 Provider failure follows section 8: **503 with `ai_unavailable` and a top level `queued_job_id`**. The photograph survives only until the queued job concludes, which then deletes it on the same terms.
 
+### 11.11 Analytics and version history
+
+Two seller facing reads and one public write. They answer different questions about the same catalogue: how many people looked, and how the record got to be the way it is.
+
+**EP-52 records a product page view.** It is public, so it resolves no session and records no user.
+
+```json
+{ "store_id": 4 }
+```
+
+`store_id` is **optional** and names the store the visitor arrived through, which is the only store context a product page has. Sent when the visitor reached the page from that store's own page or from its entry in the seller list, and omitted otherwise. A view with no store context is still recorded and still counts at product level; it simply appears in no store's analytics.
+
+Answers **201**:
+
+```json
+{ "data": { "recorded": true, "store_id": 4 } }
+```
+
+**A `store_id` naming a store that does not carry this product is recorded as `null` rather than refused**, and the response says so by echoing back what was actually attributed. A seller detaching between the page rendering and the view being posted is an ordinary race, and answering 422 into a public page render would turn that race into a visible error for a visitor who did nothing wrong. Dropping only the attribution keeps the view itself, which did happen.
+
+Because it is one call per product page render, EP-52 sits behind the public catalogue limiter rather than a limiter of its own.
+
+**EP-39 is the seller's own view counts**, over a date range given as `from` and `to` query parameters in `YYYY-MM-DD`. Both are optional and default to the last thirty days ending today. Days are **UTC days**, matching section 5, and the range may not exceed 366 of them.
+
+```json
+{
+  "data": {
+    "from": "2026-07-30",
+    "to": "2026-08-28",
+    "store_views": 40,
+    "product_views": 312,
+    "daily": [
+      { "date": "2026-07-30", "store_views": 2, "product_views": 11 }
+    ],
+    "products": [
+      {
+        "id": 7,
+        "slug": "vertex-one-smartphone",
+        "name": "Vertex One Smartphone",
+        "store_views": 12,
+        "product_views": 90,
+        "is_carried": true
+      }
+    ]
+  }
+}
+```
+
+**Two counts, and the difference between them is the point.** `store_views` are views attributed to this store. `product_views` are all views of the same products, whoever they were attributed to. A single number with nothing to compare it against says very little; the pair says how much of the interest in a product reached this particular seller.
+
+`daily` covers **every date in the range, including days with no views at all**, so a chart has no gaps to fill in. `products` lists every product this store has a view for in the range, plus every product it currently carries, so a listing with no views appears as a zero rather than vanishing. `is_carried` is false for a product the store has since detached from, whose historical views remain counted. Both totals are the sum of the `products` rows.
+
+**EP-46 is the version chain**, newest first, paginated per section 2.
+
+```json
+{
+  "version_number": 3,
+  "created_at": "2026-08-27T09:00:00Z",
+  "is_admin_originated": false,
+  "caused_by_store": { "id": 4, "name": "Colombo Audio" },
+  "changed_fields": ["specifications"]
+}
+```
+
+`changed_fields` names the top level parts of the snapshot that differ from the version before, from `name`, `slug`, `description`, `category`, `specifications`, `attributes`, and `variants`. It is an **empty array on version 1**, which created the record rather than changing it.
+
+`caused_by_store` is the store whose accepted proposal produced this version, and is **null on an administrator edit**, where `is_admin_originated` is true instead. **No administrator is ever named.** Attribution for a change that was applied to a shared record is what an audit trail is for, but naming the moderator who applied it serves no seller and gives a disgruntled one a target.
+
+**There is no proposal id here**, deliberately. EP-29 answers 404 to any store that was neither the proposer nor a frozen reviewer, which is most of the audience for this list, so the id would be a link that mostly does not open.
+
+**A rejected proposal produces no row at all** and is absent entirely. The chain records what the product became, not what was argued about, and a proposal's own fate is EP-27's business.
+
+**EP-47 is one version**, the same fields plus the full snapshot.
+
+```json
+{
+  "version_number": 3,
+  "created_at": "2026-08-27T09:00:00Z",
+  "is_admin_originated": false,
+  "caused_by_store": { "id": 4, "name": "Colombo Audio" },
+  "changed_fields": ["specifications"],
+  "snapshot": {
+    "name": "Vertex One Smartphone",
+    "slug": "vertex-one-smartphone",
+    "description": "...",
+    "category": "Phones",
+    "specifications": { "Battery": "5200 mAh" },
+    "attributes": [{ "name": "Colour", "options": ["Black"], "position": 0 }],
+    "variants": [{ "attribute_values": { "Colour": "Black" }, "combination_hash": "...", "is_default": true }]
+  }
+}
+```
+
+The snapshot is the **complete record state at that version**, not a diff, so reading one version costs one row rather than replaying the chain. There is no rollback endpoint and none is planned: history is read only, and an administrator wanting an old value edits forward through EP-43, which writes a further version.
+
+**Both version endpoints are refused to anonymous callers with 401**, and access is re-read on **every request** rather than cached anywhere:
+
+| Caller | Answer |
+|---|---|
+| Anonymous | 401 `unauthenticated` |
+| Authenticated, no store, not an administrator | 403 `store_required` |
+| Holds a store that does not carry this product | 403 `not_attached` |
+| Holds a store carrying this product | 200 |
+| Administrator | 200, store or no store |
+
+**Holding a store is not enough.** A seller who carries forty other products still gets `not_attached` on the one they do not, because the history is a working document for the sellers responsible for that record rather than a catalogue wide privilege. A seller who detaches loses access on their **next request**, mid session, with no grace period.
+
 ---
 
 ## 12. Change log
@@ -650,3 +757,4 @@ Provider failure follows section 8: **503 with `ai_unavailable` and a top level 
 | 4 | 2026-08-27 | M7. Added section 11.8, the proposal list item, the detail with its change comparison, and the vote request body. EP-27 and EP-28 paginate per section 2. No existing shape changed |
 | 5 | 2026-08-27 | M8. Added section 11.9, the attachment update request and response, the detach response carrying `store_is_live`, the wishlist item, and the wishlist add request. EP-36 paginates per section 2. Recorded that a repeated wishlist add answers the existing item rather than failing. No existing shape changed |
 | 6 | 2026-08-27 | M9. Added section 11.10, the community post, the post creation request, and the three verification shapes. EP-31 and EP-57 use cursor pagination per section 2. Clarified that a wishlist item's `lowest_price_minor` and `currency` are null together when nobody carries the variant, closing the M8 open request. `verification_result` and the `not_verified` and `attempts_exhausted` codes were already registered and are unchanged |
+| 7 | 2026-08-28 | M10. Added section 11.11, the view recording request and response, the seller analytics shape, and the two version history shapes. EP-46 paginates per section 2. Recorded in section 9 that EP-52 shares the public catalogue limiter. No new error codes: `not_attached` and `store_required` were registered in section 7 since version 1 and are reachable from the version endpoints for the first time now. No existing shape changed |

@@ -9,9 +9,12 @@ use App\Models\CommunitySummary;
 use App\Models\Product;
 use App\Models\ProductAttribute;
 use App\Models\ProductImage;
+use App\Models\ProductView;
 use App\Models\Store;
 use App\Models\User;
 use App\Models\Variant;
+use App\Services\Catalogue\ProductVersionService;
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Str;
 
@@ -38,6 +41,9 @@ class CatalogueSeeder extends Seeder
         $this->createSimpleProductWithNoAttributes($stores);
         $this->createProductWithNoSellers();
         $this->createProductCarriedOnlyByADarkStore();
+
+        $this->createVersionHistory($stores);
+        $this->createViewHistory($stores);
 
         $this->command->info('Catalogue seeded.');
     }
@@ -245,6 +251,147 @@ class CatalogueSeeder extends Seeder
         ]);
 
         Variant::factory()->for($product)->default()->create();
+    }
+
+    /**
+     * Version chains for the seeded catalogue (M10, EP-46 and EP-47).
+     *
+     * Without these, every seeded product has an empty history and the version screens
+     * have nothing to render but their empty state. The phone gets a three step chain
+     * on purpose, so all three cases a history can show are reachable: a version 1 that
+     * created the record and therefore changed nothing, a version caused by a seller's
+     * accepted proposal, and an administrator edit that names no administrator.
+     *
+     * The chain is written by walking the product backwards through the states it would
+     * have passed through and then restoring it, so the newest version matches the
+     * product as the rest of the seeder left it. A history whose latest snapshot
+     * disagreed with the live record would be worse than no history at all.
+     *
+     * @param  array<string, Store>  $stores
+     */
+    private function createVersionHistory(array $stores): void
+    {
+        $versions = app(ProductVersionService::class);
+        $administrator = User::query()->where('is_admin', true)->first();
+
+        $phone = Product::query()->where('slug', 'vertex-one-smartphone')->firstOrFail();
+        $asSeeded = $phone->specifications;
+
+        // Version 1, as the wizard would have written it when the record was created.
+        $phone->forceFill(['specifications' => [
+            'Display' => '6.1 inch OLED',
+            'Battery' => '4000 mAh',
+        ]])->save();
+
+        $versions->record(
+            $phone->refresh(),
+            causedByStore: $stores['colombo_a'],
+            causedByUser: $stores['colombo_a']->user,
+        );
+
+        // Version 2, a peer reviewed correction to the battery figure.
+        $phone->forceFill(['specifications' => [
+            'Display' => '6.1 inch OLED',
+            'Battery' => '4500 mAh',
+        ]])->save();
+
+        $versions->record(
+            $phone->refresh(),
+            causedByStore: $stores['colombo_b'],
+            causedByUser: $stores['colombo_b']->user,
+        );
+
+        // Version 3, an administrator adding the weight directly. No store caused it,
+        // and no administrator is named in the response.
+        $phone->forceFill(['specifications' => $asSeeded])->save();
+
+        $versions->record(
+            $phone->refresh(),
+            causedByUser: $administrator,
+            isAdminOriginated: true,
+        );
+
+        /*
+         * Everything else gets a single version 1, including the products nobody
+         * carries. A product with no sellers still has a canonical record and still has
+         * a history, and its version 1 has no causing store at all, which is a state the
+         * screen has to render.
+         */
+        $firstSeller = [
+            'meridian-14-laptop' => $stores['colombo_a'],
+            'standard-usb-c-cable-2m' => $stores['galle'],
+            'orbit-wireless-earbuds' => null,
+            'lumen-desk-lamp' => null,
+        ];
+
+        foreach ($firstSeller as $slug => $store) {
+            $product = Product::query()->where('slug', $slug)->firstOrFail();
+
+            $versions->record($product, causedByStore: $store, causedByUser: $store?->user);
+        }
+    }
+
+    /**
+     * Six weeks of product page views (M10, EP-39 and EP-52).
+     *
+     * Deterministic rather than random, so two people looking at the same seeded
+     * analytics see the same chart and can talk about it. The shape has a weekend dip
+     * in it because a flat line tells nobody whether the date range control works.
+     *
+     * Deliberately uneven across stores. Northern Supplies receives none at all, so the
+     * state where a seller has listings, real interest in the products they stock, and
+     * nothing attributed to them is reachable on screen rather than only in a test.
+     *
+     * @param  array<string, Store>  $stores
+     */
+    private function createViewHistory(array $stores): void
+    {
+        $attributable = [
+            'vertex-one-smartphone' => [$stores['colombo_a'], $stores['colombo_b'], $stores['kandy']],
+            'meridian-14-laptop' => [$stores['colombo_a'], $stores['colombo_b']],
+            'standard-usb-c-cable-2m' => [$stores['galle'], $stores['kandy']],
+            // Nobody carries these two, so every view of them is unattributed. They
+            // still count at product level, which is the difference the analytics screen
+            // has to make visible.
+            'orbit-wireless-earbuds' => [],
+            'lumen-desk-lamp' => [],
+        ];
+
+        $today = CarbonImmutable::now('UTC')->startOfDay();
+        $rows = [];
+
+        foreach ($attributable as $slug => $carriers) {
+            $product = Product::query()->where('slug', $slug)->firstOrFail();
+
+            for ($daysAgo = 0; $daysAgo < 45; $daysAgo++) {
+                $day = $today->subDays($daysAgo);
+
+                // A quieter weekend, and a slow decline going back in time, so the
+                // default thirty day window and a wider one look different.
+                $base = $day->isWeekend() ? 2 : 5;
+                $views = max(1, $base - intdiv($daysAgo, 15));
+
+                for ($n = 0; $n < $views; $n++) {
+                    $carrier = $carriers === [] ? null : ($carriers[($daysAgo + $n) % (count($carriers) + 1)] ?? null);
+
+                    $rows[] = [
+                        'product_id' => $product->id,
+                        // The null slot in the rotation is what makes a share of every
+                        // product's views unattributed, which is what most real traffic
+                        // is: somebody arriving at the product directly.
+                        'store_id' => $carrier?->id,
+                        'user_id' => null,
+                        'viewed_at' => $day->addHours(9 + $n),
+                    ];
+                }
+            }
+        }
+
+        foreach (array_chunk($rows, 500) as $chunk) {
+            ProductView::insert($chunk);
+        }
+
+        $this->command->info(count($rows).' product views seeded across 45 days.');
     }
 
     /**
