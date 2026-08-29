@@ -1688,6 +1688,34 @@ The verification is written as the state a real one **leaves behind** rather tha
 
 **M0 to M12 are complete.**
 
+### Second AI provider, backend, 2026-08-29
+
+**Shipped.**
+- No endpoints. Gemini joins Anthropic as a provider the `AiProvider` interface can be backed by, selected with `AI_PROVIDER=gemini`.
+- The prompts moved out of the vendor class. `AnthropicAiProvider` became `PromptedAiProvider`, which holds all seven prompts and every reply check and knows no vendor, and talks to an `AiTransport`. `AnthropicTransport` and `GeminiTransport` hold the wire format and nothing else.
+
+**Contract.**
+- Contract version at time of writing: 9
+- Changes made to api-contract.md: none. Nothing about the provider crosses the wire, and no response shape moved.
+- Error codes now live: none. `ai_unavailable` still covers every provider failure, so the client needed no change at all.
+
+**Deviations from the plan.**
+- Switching is by configuration only, as section 3 of the build plan requires. There is no runtime switch and no admin setting, and the binding stays a singleton.
+- The prompts are shared rather than copied, which is where this differs from the geocoding pair. Two copies of seven prompts would have drifted the first time one was improved, and the platform would then have behaved differently depending on who was answering. A test asserts the two providers receive byte identical prompts.
+- `GeminiTransport` sends no `thinkingConfig`, deliberately. The levels are not supported uniformly across models and the newest Flash rejects the one the Flash Lite models default to, so forcing a level would have made `GEMINI_MODEL` unswappable. It sends token headroom instead, because `maxOutputTokens` is a combined budget for thinking and answer and a 256 token request can otherwise come back empty.
+- `phpunit.xml` now pins `AI_PROVIDER` and `GEOCODING_PROVIDER` to their fakes. Neither was pinned before, so the suite ran against whatever the developer's `.env` held. Harmless while `fake` was the only configured option; a bill for a test run as soon as it is not.
+
+**Known gaps handed to the other side.**
+- None. The frontend is unaffected: the provider is invisible across the API boundary and `ai_unavailable` behaves exactly as before.
+- `AnthropicAiProvider` no longer exists by that name. Nothing outside `AiServiceProvider` referenced it, and the `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` env keys are unchanged, so an existing `.env` keeps working untouched.
+
+**Verified by.**
+- `tests/Feature/Ai/PromptedAiProviderTest.php`, 34 tests, all but one run against both providers: the shortlist index clamp, the confirmation coverage fallback, positional question ids, the score clamps, and the refusal to guess at a reply that is not JSON. Plus the prompt parity test, which runs all seven methods through both transports and compares the prompts byte for byte.
+- `tests/Feature/Ai/AnthropicTransportTest.php` and `tests/Feature/Ai/GeminiTransportTest.php`, the two wire formats against a faked HTTP client, including the three ways Gemini fails at HTTP 200: a blocked prompt, a reply cut off by the token budget, and a candidate stopped part way.
+- The Anthropic tests were written and passing **before** the refactor began, against the old class, so the 19 tests that describe what the platform sends and accepts are known to be unchanged by it.
+- Full suite: 531 passed, 5 skipped, both skips pre-existing. Pint and PHPStan clean.
+- Not yet run against either live API. No key for Gemini was available, so the wire formats are verified against Google's current documentation and a faked client, not against the service.
+
 ---
 
 ## 4. Open requests

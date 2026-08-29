@@ -13,7 +13,10 @@ return [
     | no network, which is what lets the platform be developed and tested without a
     | provider bill.
     |
-    | Supported: "fake", "anthropic"
+    | Supported: "fake", "anthropic", "gemini"
+    |
+    | Switching is a config change and nothing else: clear the config cache and restart
+    | the queue workers, which hold the old value in memory until they do.
     |
     */
 
@@ -56,6 +59,34 @@ return [
     'anthropic' => [
         'key' => env('ANTHROPIC_API_KEY'),
         'model' => env('ANTHROPIC_MODEL', 'claude-sonnet-4-5'),
+        'timeout' => (int) env('AI_TIMEOUT_SECONDS', 5),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Gemini
+    |--------------------------------------------------------------------------
+    |
+    | Two of the seven calls send an image, so whatever model is named here has to be
+    | vision capable. The rest are short JSON answers on the interactive path, where
+    | latency is the cost that shows, which is why the default is a Flash Lite rather
+    | than the largest model available.
+    |
+    | Changing this line is safe, but read GeminiTransport first. Models differ in how
+    | much they think before answering and the transport deliberately leaves that at
+    | each model's own default, because the newest Flash rejects outright the setting
+    | the Flash Lite models default to. A model that thinks more spends more of the
+    | reply budget doing it.
+    |
+    | The timeout is shared with the other provider on purpose. It describes how long
+    | the platform is willing to wait, not how slow a particular vendor is, and a
+    | per vendor knob would be an invitation to raise it rather than to degrade.
+    |
+    */
+
+    'gemini' => [
+        'key' => env('GEMINI_API_KEY'),
+        'model' => env('GEMINI_MODEL', 'gemini-3.5-flash-lite'),
         'timeout' => (int) env('AI_TIMEOUT_SECONDS', 5),
     ],
 

@@ -18,6 +18,22 @@
         </include>
     </source>
     <php>
+        <!--
+            The AI and geocoding providers are pinned to their fakes, deliberately.
+
+            Neither was named here before, so the suite ran against whatever the
+            developer's .env happened to hold. That was harmless while `fake` was the
+            only option anybody had credentials for. It stops being harmless as soon as
+            a second real key exists: a developer whose .env names a real provider would
+            send every AI test to a paid endpoint and get a bill for a test run, and the
+            suite would pass while doing it.
+
+            Tests that exercise a real adapter construct it directly and fake the HTTP
+            client. Nothing here needs the container binding to be real.
+        -->
+        <env name="AI_PROVIDER" value="fake"/>
+        <env name="AI_FAKE_SHOULD_FAIL" value="false"/>
+        <env name="GEOCODING_PROVIDER" value="fake"/>
         <env name="APP_ENV" value="testing"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>

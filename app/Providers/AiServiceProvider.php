@@ -6,8 +6,10 @@ namespace App\Providers;
 
 use App\Contracts\AiProvider;
 use App\Contracts\GeocodingProvider;
-use App\Services\Ai\AnthropicAiProvider;
+use App\Services\Ai\AnthropicTransport;
 use App\Services\Ai\FakeAiProvider;
+use App\Services\Ai\GeminiTransport;
+use App\Services\Ai\PromptedAiProvider;
 use App\Services\Geocoding\FakeGeocodingProvider;
 use App\Services\Geocoding\LocationIqProvider;
 use Illuminate\Support\ServiceProvider;
@@ -31,16 +33,27 @@ final class AiServiceProvider extends ServiceProvider
                     shouldFail: (bool) config('ai.fake_should_fail'),
                 ),
 
-                'anthropic' => new AnthropicAiProvider(
+                /*
+                 * The prompts are the same class whoever answers. Only the transport
+                 * differs, so a new provider is a new transport plus an arm here, and
+                 * can never be a second copy of the prompts.
+                 */
+                'anthropic' => new PromptedAiProvider(new AnthropicTransport(
                     apiKey: (string) config('ai.anthropic.key'),
                     model: (string) config('ai.anthropic.model'),
                     timeoutSeconds: (int) config('ai.anthropic.timeout'),
-                ),
+                )),
+
+                'gemini' => new PromptedAiProvider(new GeminiTransport(
+                    apiKey: (string) config('ai.gemini.key'),
+                    model: (string) config('ai.gemini.model'),
+                    timeoutSeconds: (int) config('ai.gemini.timeout'),
+                )),
 
                 // A typo in AI_PROVIDER should fail loudly at boot rather than
                 // silently falling back to a provider nobody chose.
                 default => throw new InvalidArgumentException(
-                    "Unknown AI provider [{$provider}]. Supported: fake, anthropic.",
+                    "Unknown AI provider [{$provider}]. Supported: fake, anthropic, gemini.",
                 ),
             };
         });

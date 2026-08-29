@@ -6,32 +6,24 @@ namespace App\Services\Ai;
 
 use App\Contracts\AiProvider;
 use App\Models\Product;
-use Illuminate\Http\Client\ConnectionException;
-use Illuminate\Http\Client\Response;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Str;
-use Throwable;
 
 /**
- * The real provider adapter.
+ * Every prompt the platform sends, and every reply it will accept.
  *
- * The only class in the application that knows Anthropic exists. Every feature depends
- * on the AiProvider interface, so switching vendor is a config change plus one new
- * class in this directory.
+ * This class knows no vendor. It writes the questions, checks what comes back, and hands
+ * the wire to a transport, which is why the same seven prompts serve whichever provider
+ * configuration names. A second provider is a second transport, and can never be a
+ * second copy of the prompts: they would drift the first time one was improved, and the
+ * platform would quietly behave differently depending on who was answering.
  *
- * No test exercises this class against the network. Tests bind FakeAiProvider instead,
- * which is what makes the suite runnable offline and free.
+ * No test exercises this class against a network. The transport tests fake the HTTP
+ * client, and everything else binds FakeAiProvider, which is what makes the suite
+ * runnable offline and free.
  */
-final class AnthropicAiProvider implements AiProvider
+final class PromptedAiProvider implements AiProvider
 {
     public function __construct(
-        private readonly string $apiKey,
-        private readonly string $model,
-        /**
-         * Short on purpose. A slow provider must degrade to keyword search rather than
-         * hang the request, and buyer search is the availability floor for discovery.
-         */
-        private readonly int $timeoutSeconds = 5,
+        private readonly AiTransport $transport,
     ) {}
 
     public function interpretSearchQuery(string $query): SearchInterpretation
@@ -45,7 +37,7 @@ final class AnthropicAiProvider implements AiProvider
             Query: {$query}
             PROMPT;
 
-        $decoded = $this->ask([['type' => 'text', 'text' => $prompt]], maxTokens: 256);
+        $decoded = $this->ask(AiRequest::for($prompt, maxTokens: 256));
 
         if (! isset($decoded['terms']) || ! is_string($decoded['terms'])) {
             throw AiUnavailable::because('the provider reply was not in the expected shape');
@@ -112,15 +104,15 @@ final class AnthropicAiProvider implements AiProvider
             {$numbered}
             PROMPT;
 
-        $content = [['type' => 'text', 'text' => $prompt]];
+        $request = AiRequest::for($prompt, maxTokens: 512);
 
         // Matching operates on text and images, so the image travels in the same
         // message when one was supplied. This is what makes the interface vision bound.
         if ($draft->imagePath !== null) {
-            $content[] = $this->imageBlock($draft->imagePath);
+            $request = $request->withImage(AiImage::fromPath($draft->imagePath));
         }
 
-        $decoded = $this->ask($content, maxTokens: 512);
+        $decoded = $this->ask($request);
 
         $matches = is_array($decoded['matches'] ?? null) ? $decoded['matches'] : [];
         $candidates = [];
@@ -170,7 +162,7 @@ final class AnthropicAiProvider implements AiProvider
             Category: {$category}
             PROMPT;
 
-        $decoded = $this->ask([['type' => 'text', 'text' => $prompt]], maxTokens: 1024);
+        $decoded = $this->ask(AiRequest::for($prompt, maxTokens: 1024));
 
         $questions = is_array($decoded['questions'] ?? null) ? $decoded['questions'] : [];
         $generated = [];
@@ -233,7 +225,7 @@ final class AnthropicAiProvider implements AiProvider
             {$listed}
             PROMPT;
 
-        $decoded = $this->ask([['type' => 'text', 'text' => $prompt]], maxTokens: 1500);
+        $decoded = $this->ask(AiRequest::for($prompt, maxTokens: 1500));
 
         $written = [];
 
@@ -295,7 +287,7 @@ final class AnthropicAiProvider implements AiProvider
             {$transcript}
             PROMPT;
 
-        $decoded = $this->ask([['type' => 'text', 'text' => $prompt]], maxTokens: 512);
+        $decoded = $this->ask(AiRequest::for($prompt, maxTokens: 512));
 
         if (! isset($decoded['score']) || ! is_numeric($decoded['score'])) {
             throw AiUnavailable::because('the provider returned no usable confidence score');
@@ -344,48 +336,19 @@ final class AnthropicAiProvider implements AiProvider
     }
 
     /**
-     * One request, one decoded JSON reply.
+     * One request, one decoded JSON object.
      *
-     * Every call this adapter makes fails in the same handful of ways, and handling
-     * them once keeps a newly added method from quietly omitting one.
+     * The transport hands back whatever the model wrote. Deciding whether that is the
+     * JSON we asked for is a judgement about the answer rather than about the wire, so
+     * it happens here, once, and applies to every provider alike.
      *
-     * @param  array<int, array<string, mixed>>  $content
      * @return array<string, mixed>
      *
      * @throws AiUnavailable
      */
-    private function ask(array $content, int $maxTokens): array
+    private function ask(AiRequest $request): array
     {
-        try {
-            $response = Http::withHeaders([
-                'x-api-key' => $this->apiKey,
-                'anthropic-version' => '2023-06-01',
-            ])
-                ->timeout($this->timeoutSeconds)
-                ->post('https://api.anthropic.com/v1/messages', [
-                    'model' => $this->model,
-                    'max_tokens' => $maxTokens,
-                    'messages' => [['role' => 'user', 'content' => $content]],
-                ]);
-        } catch (ConnectionException) {
-            throw AiUnavailable::because('the request timed out or the host was unreachable');
-        } catch (Throwable $e) {
-            throw AiUnavailable::because($e->getMessage());
-        }
-
-        if ($response->failed()) {
-            throw AiUnavailable::because(
-                "the provider returned HTTP {$response->status()}: ".$this->reasonFrom($response),
-            );
-        }
-
-        $text = $response->json('content.0.text');
-
-        if (! is_string($text)) {
-            throw AiUnavailable::because('the provider returned no text content');
-        }
-
-        $decoded = json_decode($text, true);
+        $decoded = json_decode($this->transport->ask($request), true);
 
         // A reply that is not the JSON we asked for is a failure, not something to
         // guess at. Guessing would put invented facts onto a canonical record.
@@ -393,45 +356,10 @@ final class AnthropicAiProvider implements AiProvider
             throw AiUnavailable::because('the provider reply was not in the expected shape');
         }
 
+        /** @var array<string, mixed> $decoded */
         return $decoded;
     }
 
-    /**
-     * Whatever the provider said about a request it refused.
-     *
-     * The status code alone is not enough to act on. A wrong model name, a key that has
-     * been revoked and an account with no credit left all come back as HTTP 400, so a
-     * log line carrying only the number cannot tell them apart and every one of them
-     * looks like a bug in this class. The body says which it was, so it belongs in the
-     * message.
-     *
-     * Only ever read from the response, so there is no risk of the key being echoed
-     * into a log by accident.
-     */
-    private function reasonFrom(Response $response): string
-    {
-        $reason = $response->json('error.message');
-
-        if (is_string($reason) && trim($reason) !== '') {
-            return trim($reason);
-        }
-
-        // Not the documented error shape, which usually means the reply came from
-        // something in front of the API rather than the API itself. The raw body is
-        // still the most useful thing available, capped because a proxy error page can
-        // be an entire HTML document and the log only needs enough to recognise it.
-        $body = trim($response->body());
-
-        return $body === '' ? 'no reason was given' : Str::limit($body, 300);
-    }
-
-    /**
-     * An uploaded image, inlined as base64 for the vision request.
-     *
-     * @return array<string, mixed>
-     *
-     * @throws AiUnavailable
-     */
     /**
      * Judge a verification photograph.
      *
@@ -477,19 +405,12 @@ final class AnthropicAiProvider implements AiProvider
             to them. Say what was missing or wrong. Do not describe your reasoning.
             PROMPT;
 
-        $decoded = $this->ask([
-            ['type' => 'text', 'text' => $prompt],
-            [
-                'type' => 'image',
-                'source' => [
-                    'type' => 'base64',
-                    'media_type' => $mimeType,
-                    // Bytes, not a path. Nothing here learns where the file lived, and
-                    // the caller deletes it the moment this returns.
-                    'data' => base64_encode($photo),
-                ],
-            ],
-        ], maxTokens: 256);
+        $decoded = $this->ask(
+            AiRequest::for($prompt, maxTokens: 256)
+                // Bytes, not a path. Nothing here learns where the file lived, and the
+                // caller deletes it the moment this returns.
+                ->withImage(AiImage::fromBytes($photo, $mimeType)),
+        );
 
         $passed = (bool) ($decoded['passed'] ?? false);
         $reason = trim((string) ($decoded['reason'] ?? ''));
@@ -537,27 +458,8 @@ final class AnthropicAiProvider implements AiProvider
             Reply with JSON only, in the form {"summary": "..."}.
             PROMPT;
 
-        $decoded = $this->ask([['type' => 'text', 'text' => $prompt]], maxTokens: 512);
+        $decoded = $this->ask(AiRequest::for($prompt, maxTokens: 512));
 
         return trim((string) ($decoded['summary'] ?? ''));
-    }
-
-    /** @return array{type: string, source: array{type: string, media_type: string, data: string}} */
-    private function imageBlock(string $path): array
-    {
-        $bytes = @file_get_contents($path);
-
-        if ($bytes === false) {
-            throw AiUnavailable::because('the uploaded image could not be read');
-        }
-
-        return [
-            'type' => 'image',
-            'source' => [
-                'type' => 'base64',
-                'media_type' => (string) (mime_content_type($path) ?: 'image/jpeg'),
-                'data' => base64_encode($bytes),
-            ],
-        ];
     }
 }
