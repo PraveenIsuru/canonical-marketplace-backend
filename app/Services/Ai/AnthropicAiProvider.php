@@ -7,7 +7,9 @@ namespace App\Services\Ai;
 use App\Contracts\AiProvider;
 use App\Models\Product;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -372,7 +374,9 @@ final class AnthropicAiProvider implements AiProvider
         }
 
         if ($response->failed()) {
-            throw AiUnavailable::because("the provider returned HTTP {$response->status()}");
+            throw AiUnavailable::because(
+                "the provider returned HTTP {$response->status()}: ".$this->reasonFrom($response),
+            );
         }
 
         $text = $response->json('content.0.text');
@@ -390,6 +394,35 @@ final class AnthropicAiProvider implements AiProvider
         }
 
         return $decoded;
+    }
+
+    /**
+     * Whatever the provider said about a request it refused.
+     *
+     * The status code alone is not enough to act on. A wrong model name, a key that has
+     * been revoked and an account with no credit left all come back as HTTP 400, so a
+     * log line carrying only the number cannot tell them apart and every one of them
+     * looks like a bug in this class. The body says which it was, so it belongs in the
+     * message.
+     *
+     * Only ever read from the response, so there is no risk of the key being echoed
+     * into a log by accident.
+     */
+    private function reasonFrom(Response $response): string
+    {
+        $reason = $response->json('error.message');
+
+        if (is_string($reason) && trim($reason) !== '') {
+            return trim($reason);
+        }
+
+        // Not the documented error shape, which usually means the reply came from
+        // something in front of the API rather than the API itself. The raw body is
+        // still the most useful thing available, capped because a proxy error page can
+        // be an entire HTML document and the log only needs enough to recognise it.
+        $body = trim($response->body());
+
+        return $body === '' ? 'no reason was given' : Str::limit($body, 300);
     }
 
     /**
